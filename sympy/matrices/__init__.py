@@ -21,6 +21,7 @@ Matrix = MutableMatrix
 from .sparse import MutableSparseMatrix
 from .sparsetools import banded
 from .immutable import ImmutableDenseMatrix, ImmutableSparseMatrix
+from .ilinsolve import DivisibilityContradiction, ilinsolve
 
 ImmutableMatrix = ImmutableDenseMatrix
 SparseMatrix = MutableSparseMatrix
@@ -58,6 +59,8 @@ __all__ = [
     'ImmutableDenseMatrix', 'ImmutableSparseMatrix',
 
     'ImmutableMatrix', 'SparseMatrix',
+
+    'DivisibilityContradiction', 'ilinsolve',
 
     'MatrixSlice', 'BlockDiagMatrix', 'BlockMatrix', 'FunctionMatrix',
     'Identity', 'Inverse', 'MatAdd', 'MatMul', 'MatPow', 'MatrixExpr',
