@@ -20,6 +20,7 @@ from sympy.ntheory import primefactors, sieve
 from sympy.ntheory.factor_ import (factorint, multiplicity)
 from sympy.ntheory.primetest import isprime
 from sympy.utilities.iterables import has_variety, is_sequence, uniq
+from sympy.utilities.misc import as_int
 
 if TYPE_CHECKING:
     from sympy.combinatorics.character_table import CharacterTable
@@ -1764,6 +1765,162 @@ class PermutationGroup(Basic):
         if g in self.generators:
             return True
         return bool(self.coset_factor(g.array_form, True))
+
+    def count_colored_orbits(self, color_counts, allowed_colors=None):
+        r"""Count distinct colorings of the positions up to the group action.
+
+        Explanation
+        ===========
+
+        A coloring assigns one color to each of the ``self.degree``
+        positions, using each color exactly the number of times given by
+        ``color_counts``. Two colorings are equivalent when an element of
+        the group maps one to the other; this method returns the exact
+        number of equivalence classes (orbits).
+
+        Positions may individually be restricted to subsets of the colors
+        via ``allowed_colors``. Such restrictions break part of the
+        symmetry, so only the subgroup of elements that map every position
+        to a position with the same allowed colors is used. The colors
+        themselves are labeled: no permutation of the colors is factored
+        out. A color whose required count is zero cannot be used at all,
+        and quotas that cannot be met (negative counts, counts not summing
+        to the degree, or a position with no usable color) give ``0``.
+
+        Parameters
+        ==========
+
+        color_counts : dict
+            Maps each color to the exact number of positions that must
+            receive it. Colors missing from the dict have count zero.
+        allowed_colors : sequence, optional
+            A sequence of length ``self.degree`` whose ``i``-th entry is
+            the collection of colors allowed at position ``i``. By default
+            every position allows every color.
+
+        Returns
+        =======
+
+        int
+            The number of orbits of valid colorings.
+
+        Examples
+        ========
+
+        The distinct necklaces of four beads with exactly two black and
+        two white beads, up to rotation:
+
+        >>> from sympy.combinatorics.named_groups import CyclicGroup
+        >>> CyclicGroup(4).count_colored_orbits({'b': 2, 'w': 2})
+        2
+
+        With position restrictions only the subgroup preserving them acts.
+        Here the two pairs of positions allow different colors and the
+        group swaps within each pair:
+
+        >>> from sympy.combinatorics import Permutation, PermutationGroup
+        >>> G = PermutationGroup(Permutation(0, 1), Permutation(2, 3))
+        >>> G.count_colored_orbits({'b': 1, 'w': 2, 'r': 1},
+        ...     allowed_colors=[{'b', 'w'}, {'b', 'w'}, {'w', 'r'}, {'w', 'r'}])
+        1
+
+        Quotas that cannot be satisfied give zero:
+
+        >>> CyclicGroup(4).count_colored_orbits({'b': 3, 'w': 2})
+        0
+
+        Notes
+        =====
+
+        The count uses Burnside's lemma over the subgroup preserving the
+        position restrictions. A coloring fixed by a permutation is
+        constant on each of its cycles, so the number of colorings it
+        fixes is a coefficient of a product of cycle index terms, one
+        factor :math:`\sum_c x_c^{\ell}` per cycle of length
+        :math:`\ell`, extracted by a sparse dynamic program over the
+        quota vectors. The colorings themselves are never enumerated,
+        which keeps the method usable when the number of valid colorings
+        is astronomical but the subgroup is small.
+
+        See Also
+        ========
+
+        subgroup_search
+
+        """
+        degree = self.degree
+        quotas = {color: as_int(count)
+                  for color, count in color_counts.items()}
+        if any(count < 0 for count in quotas.values()):
+            return 0
+        if sum(quotas.values()) != degree:
+            return 0
+        usable = {color for color, count in quotas.items() if count > 0}
+
+        if allowed_colors is None:
+            allowed = [frozenset(usable)]*degree
+        else:
+            if len(allowed_colors) != degree:
+                raise ValueError(
+                    "allowed_colors must have one entry per position")
+            allowed = [frozenset(entry) & usable for entry in allowed_colors]
+        if any(not entry for entry in allowed):
+            return 0
+
+        colors = sorted(usable, key=repr)
+        color_index = {color: i for i, color in enumerate(colors)}
+        target = tuple(quotas[color] for color in colors)
+
+        class_of = []
+        class_colors = []
+        class_lookup = {}
+        for entry in allowed:
+            cls = class_lookup.get(entry)
+            if cls is None:
+                cls = len(class_colors)
+                class_lookup[entry] = cls
+                class_colors.append(tuple(sorted(
+                    color_index[color] for color in entry)))
+            class_of.append(cls)
+
+        if len(class_colors) == 1:
+            subgroup = self
+        else:
+            def preserves_classes(g):
+                images = g.array_form
+                return all(class_of[images[i]] == class_of[i]
+                           for i in range(degree))
+            subgroup = self.subgroup_search(preserves_classes)
+
+        def fixed_colorings(signature):
+            states = {(0,)*len(colors): 1}
+            for cls, length in signature:
+                new_states = {}
+                for state, coeff in states.items():
+                    for ci in class_colors[cls]:
+                        if state[ci] + length <= target[ci]:
+                            nstate = list(state)
+                            nstate[ci] += length
+                            nstate = tuple(nstate)
+                            new_states[nstate] = (new_states.get(nstate, 0)
+                                                  + coeff)
+                if not new_states:
+                    return 0
+                states = new_states
+            return states.get(target, 0)
+
+        cache = {}
+        total = 0
+        for g in subgroup.generate():
+            signature = tuple(sorted(
+                (class_of[cycle[0]], len(cycle))
+                for cycle in g.full_cyclic_form))
+            fixed = cache.get(signature)
+            if fixed is None:
+                fixed = fixed_colorings(signature)
+                cache[signature] = fixed
+            total += fixed
+        return total//subgroup.order()
 
     @property
     def is_perfect(self):

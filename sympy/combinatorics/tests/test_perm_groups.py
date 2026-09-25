@@ -10,7 +10,7 @@ from sympy.combinatorics.permutations import Permutation
 from sympy.combinatorics.polyhedron import tetrahedron as Tetra, cube
 from sympy.combinatorics.testutil import _verify_bsgs, _verify_centralizer,\
     _verify_normal_closure
-from sympy.testing.pytest import skip, XFAIL, slow
+from sympy.testing.pytest import skip, XFAIL, slow, raises
 
 rmul = Permutation.rmul
 
@@ -84,6 +84,84 @@ def test_molien():
     G = PermutationGroup(Permutation(5))
     assert G.molien() == 1/(1 - t)**6
 
+
+def test_count_colored_orbits():
+    from itertools import product
+
+    def brute_force(G, color_counts, allowed_colors=None):
+        n = G.degree
+        colors = sorted(color_counts)
+        if allowed_colors is None:
+            allowed = [frozenset(colors)]*n
+        else:
+            allowed = [frozenset(a) for a in allowed_colors]
+        subgroup = [g for g in G.elements if all(
+            allowed[g.array_form[i]] == allowed[i] for i in range(n))]
+        seen = set()
+        orbits = 0
+        for assign in product(colors, repeat=n):
+            if any(assign[i] not in allowed[i] for i in range(n)):
+                continue
+            if any(assign.count(c) != color_counts[c] for c in colors):
+                continue
+            if assign in seen:
+                continue
+            orbits += 1
+            for g in subgroup:
+                image = [None]*n
+                for i in range(n):
+                    image[g.array_form[i]] = assign[i]
+                seen.add(tuple(image))
+        return orbits
+
+    def check(G, color_counts, allowed_colors=None):
+        assert G.count_colored_orbits(
+            color_counts, allowed_colors=allowed_colors
+            ) == brute_force(G, color_counts, allowed_colors)
+
+    # necklaces with fixed color quotas
+    assert CyclicGroup(4).count_colored_orbits({'b': 2, 'w': 2}) == 2
+    assert CyclicGroup(6).count_colored_orbits({'b': 3, 'w': 3}) == 4
+    check(DihedralGroup(4), {'a': 2, 'b': 1, 'c': 1})
+    check(SymmetricGroup(4), {'a': 2, 'b': 2})
+    check(AlternatingGroup(4), {'a': 2, 'b': 1, 'c': 1})
+
+    # a color with zero quota cannot be used
+    check(CyclicGroup(5), {'a': 2, 'b': 2, 'c': 1, 'd': 0})
+    assert CyclicGroup(4).count_colored_orbits({'b': 2, 'w': 2, 'r': 0}) == \
+        CyclicGroup(4).count_colored_orbits({'b': 2, 'w': 2})
+
+    # impossible quotas
+    assert CyclicGroup(4).count_colored_orbits({'b': 3, 'w': 2}) == 0
+    assert CyclicGroup(4).count_colored_orbits({'b': -1, 'w': 5}) == 0
+    assert CyclicGroup(4).count_colored_orbits(
+        {'b': 2, 'w': 2}, allowed_colors=[{'b'}]*4) == 0
+
+    # position restrictions: only the subgroup preserving them acts
+    G = PermutationGroup(Permutation(0, 1), Permutation(2, 3))
+    assert G.count_colored_orbits(
+        {'b': 1, 'w': 2, 'r': 1},
+        allowed_colors=[{'b', 'w'}, {'b', 'w'}, {'w', 'r'}, {'w', 'r'}]) == 1
+    check(G, {'b': 2, 'w': 2},
+          allowed_colors=[{'b', 'w'}, {'b'}, {'b', 'w'}, {'w'}])
+    G = PermutationGroup(Permutation(0, 1, 2), Permutation(3, 4))
+    check(G, {'x': 2, 'y': 3},
+          allowed_colors=[{'x', 'y'}]*3 + [{'y'}]*2)
+    check(G, {'x': 2, 'y': 2, 'z': 1})
+    G = PermutationGroup(Permutation(0, 1, 2, 3), Permutation(0, 1))
+    check(G, {'a': 2, 'b': 2},
+          allowed_colors=[{'a', 'b'}, {'a', 'b'}, {'b'}, {'a', 'b'}])
+
+    # colors may be any hashables, e.g. integers
+    assert CyclicGroup(4).count_colored_orbits({0: 2, 1: 2}) == 2
+
+    # too many colorings to enumerate (about 5.5 trillion), but the
+    # group is small: tricolored necklaces of length 30
+    assert CyclicGroup(30).count_colored_orbits(
+        {'a': 10, 'b': 10, 'c': 10}) == 185033251616
+
+    raises(ValueError, lambda: CyclicGroup(3).count_colored_orbits(
+        {'a': 3}, allowed_colors=[{'a'}]))
 
 def test_identity_generators_dups_false():
     identity = Permutation(3)
