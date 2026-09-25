@@ -6,6 +6,7 @@ from sympy.calculus.util import (continuous_domain, periodicity,
     function_range)
 from sympy.core import sympify
 from sympy.core.exprtools import factor_terms
+from sympy.core.numbers import Rational
 from sympy.core.relational import Relational, Lt, Ge, Eq
 from sympy.core.symbol import Symbol, Dummy
 from sympy.sets.sets import Interval, FiniteSet, Union, Intersection
@@ -13,8 +14,11 @@ from sympy.core.singleton import S
 from sympy.core.function import expand_mul
 from sympy.functions.elementary.complexes import Abs
 from sympy.logic import And
-from sympy.polys import Poly, PolynomialError, parallel_poly_from_expr
+from sympy.polys import (Poly, PolynomialError, parallel_poly_from_expr,
+    cancel, real_roots)
+from sympy.polys.polyerrors import CoercionFailed
 from sympy.polys.polyutils import _nsort
+from sympy.simplify import simplify
 from sympy.solvers.solveset import solvify, solveset
 from sympy.utilities.iterables import sift, iterable
 from sympy.utilities.misc import filldedent
@@ -990,3 +994,217 @@ def reduce_inequalities(inequalities, symbols=[]):
 
     # restore original symbols and return
     return rv.xreplace({v: k for k, v in recast.items()})
+
+
+def _rational_between(lo, hi):
+    """Return a rational number strictly between the extended reals
+    ``lo`` and ``hi`` (which must satisfy ``lo < hi``)."""
+    if lo is S.NegativeInfinity:
+        if hi is S.Infinity:
+            return S.Zero
+        n = Rational(int(hi.evalf(30).floor()))
+        while not n < hi:
+            n -= 1
+        return n
+    if hi is S.Infinity:
+        n = Rational(int(lo.evalf(30).floor())) + 1
+        while not lo < n:
+            n += 1
+        return n
+    prec = 30
+    for _ in range(100):
+        candidate = Rational((lo.evalf(prec) + hi.evalf(prec))/2)
+        if lo < candidate < hi:
+            return candidate
+        prec *= 2
+    raise RuntimeError(
+        "could not find a rational number between %s and %s" % (lo, hi))
+
+
+def solve_parametric_inequalities(inequalities, x, a):
+    r"""
+    Solve a system of inequalities that are linear in ``x`` with
+    coefficients that are polynomials in a real parameter ``a``.
+
+    Each inequality must be strict or non-strict (``<``, ``<=``, ``>`` or
+    ``>=``) and, after moving every term to the left-hand side, must be of
+    the form ``p(a)*x + q(a)`` where ``p`` and ``q`` are polynomials in the
+    parameter ``a`` with rational coefficients.
+
+    The parameter axis is partitioned at every critical value of ``a``
+    where the solution set can change shape: the real roots of every
+    coefficient ``p(a)`` (where the sense of an inequality flips or the
+    inequality degenerates) and the real values of ``a`` where the
+    boundary points ``-q(a)/p(a)`` of two inequalities cross.  Boundary
+    (critical) parameter values are reported separately as singleton sets.
+
+    Returns
+    =======
+
+    A list of pairs ``(param_set, solution_set)`` where the ``param_set``
+    are disjoint subsets of the reals (open intervals or singletons) whose
+    union is the whole real line, and ``solution_set`` is the set of
+    values of ``x`` satisfying every inequality for any value of ``a`` in
+    ``param_set``.  Solution sets may involve ``a`` symbolically.
+    Parameter regions for which there is no solution are included with
+    ``S.EmptySet`` as the solution set.
+
+    Examples
+    ========
+
+    >>> from sympy.solvers.inequalities import solve_parametric_inequalities
+    >>> from sympy.abc import a, x
+
+    The sign of the coefficient of ``x`` determines the sense of the
+    solution, so the answer is split at the critical value ``a = 0``:
+
+    >>> solve_parametric_inequalities([a*x < 1], x, a)
+    [(Interval.open(-oo, 0), Interval.open(1/a, oo)), ({0}, Reals), (Interval.open(0, oo), Interval.open(-oo, 1/a))]
+
+    Systems of inequalities are supported, and parameter regions with no
+    solution are reported explicitly:
+
+    >>> solve_parametric_inequalities([x > a, x < 2*a], x, a)
+    [(Interval.open(-oo, 0), EmptySet), ({0}, EmptySet), (Interval.open(0, oo), Interval.open(a, 2*a))]
+
+    Inequalities that do not involve ``x`` restrict the parameter only:
+
+    >>> solve_parametric_inequalities([a < 1, x > 0], x, a)
+    [(Interval.open(-oo, 1), Interval.open(0, oo)), ({1}, EmptySet), (Interval.open(1, oo), EmptySet)]
+
+    See Also
+    ========
+
+    reduce_inequalities, solve_univariate_inequality
+    """
+    if not isinstance(x, Symbol) or not isinstance(a, Symbol):
+        raise TypeError('x and a must be symbols')
+    if x == a:
+        raise ValueError('x and a must be distinct symbols')
+    if not iterable(inequalities):
+        inequalities = [inequalities]
+
+    flip = {'<': '>', '<=': '>=', '>': '<', '>=': '<='}
+    x_ineqs = []
+    a_ineqs = []
+    crit_polys = []
+
+    for ie in inequalities:
+        ie = sympify(ie)
+        if ie is S.true:
+            continue
+        if ie is S.false:
+            return [(S.Reals, S.EmptySet)]
+        if not isinstance(ie, Relational) or ie.rel_op not in flip:
+            raise ValueError(filldedent('''
+                only strict or non-strict inequalities are supported,
+                got %s''' % ie))
+        expr = expand_mul(ie.lhs - ie.rhs)
+        try:
+            xpoly = Poly(expr, x)
+        except PolynomialError:
+            raise ValueError(
+                'inequalities must be polynomial in %s, got %s' % (x, expr))
+        if xpoly.degree() > 1:
+            raise ValueError(
+                'inequalities must be linear in %s, got %s' % (x, expr))
+        if xpoly.degree() == 1:
+            p, q = xpoly.all_coeffs()
+        else:
+            p, q = S.Zero, xpoly.as_expr()
+        try:
+            p_poly = Poly(p, a, domain='QQ')
+            q_poly = Poly(q, a, domain='QQ')
+        except (PolynomialError, CoercionFailed):
+            raise ValueError(filldedent('''
+                coefficients of %s must be polynomials with rational
+                coefficients in the parameter %s''' % (x, a)))
+        if p_poly.is_zero:
+            if q.is_number:
+                if not bool(Relational(q, 0, ie.rel_op)):
+                    return [(S.Reals, S.EmptySet)]
+                continue
+            a_ineqs.append((ie.rel_op, q))
+            crit_polys.append(q_poly)
+        else:
+            x_ineqs.append((ie.rel_op, p, q, p_poly, q_poly))
+            crit_polys.append(p_poly)
+
+    for ineq1, ineq2 in itertools.combinations(x_ineqs, 2):
+        cross = ineq1[4]*ineq2[3] - ineq2[4]*ineq1[3]
+        if not cross.is_zero:
+            crit_polys.append(cross)
+
+    criticals = []
+    for poly in crit_polys:
+        criticals.extend(real_roots(poly))
+    criticals = sorted(criticals)
+    deduped = []
+    for c in criticals:
+        if deduped and (c - deduped[-1]).is_zero:
+            continue
+        deduped.append(c)
+    criticals = deduped
+
+    def solve_for(param_value, symbolic):
+        lower = []
+        upper = []
+        for rel, q in a_ineqs:
+            if not bool(Relational(q.subs(a, param_value), 0, rel)):
+                return S.EmptySet
+        for rel, p, q, p_poly, q_poly in x_ineqs:
+            p0 = p.subs(a, param_value)
+            q0 = q.subs(a, param_value)
+            if p0.is_zero:
+                if not bool(Relational(q0, 0, rel)):
+                    return S.EmptySet
+                continue
+            bound_value = -q0/p0
+            bound = cancel(-q/p) if symbolic else simplify(bound_value)
+            strict = rel in ('<', '>')
+            if (p0 > 0) == (rel in ('>', '>=')):
+                lower.append((bound_value, bound, strict))
+            else:
+                upper.append((bound_value, bound, strict))
+
+        lo_val = lo_bound = hi_val = hi_bound = None
+        lo_strict = hi_strict = False
+        for val, bound, strict in lower:
+            if lo_val is None or val > lo_val:
+                lo_val, lo_bound, lo_strict = val, bound, strict
+            elif not val < lo_val:
+                lo_strict = lo_strict or strict
+        for val, bound, strict in upper:
+            if hi_val is None or val < hi_val:
+                hi_val, hi_bound, hi_strict = val, bound, strict
+            elif not val > hi_val:
+                hi_strict = hi_strict or strict
+
+        if lo_val is not None and hi_val is not None:
+            if lo_val > hi_val:
+                return S.EmptySet
+            if not lo_val < hi_val:
+                if lo_strict or hi_strict:
+                    return S.EmptySet
+                return FiniteSet(lo_bound)
+        if lo_val is None and hi_val is None:
+            return S.Reals
+        if hi_val is None:
+            return Interval(lo_bound, S.Infinity, left_open=lo_strict)
+        if lo_val is None:
+            return Interval(S.NegativeInfinity, hi_bound, right_open=hi_strict)
+        return Interval(lo_bound, hi_bound, lo_strict, hi_strict)
+
+    result = []
+    lo = S.NegativeInfinity
+    for c in criticals:
+        sample = _rational_between(lo, c)
+        result.append((Interval.open(lo, c), solve_for(sample, True)))
+        result.append((FiniteSet(c), solve_for(c, False)))
+        lo = c
+    sample = _rational_between(lo, S.Infinity)
+    if lo is S.NegativeInfinity:
+        result.append((S.Reals, solve_for(sample, True)))
+    else:
+        result.append((Interval.open(lo, S.Infinity), solve_for(sample, True)))
+    return result

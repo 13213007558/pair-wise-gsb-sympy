@@ -35,3 +35,5 @@ called internally as needed by ``reduce_inequalities``.
 .. autofunction:: reduce_inequalities
 
 .. autofunction:: solve_univariate_inequality
+
+.. autofunction:: solve_parametric_inequalities

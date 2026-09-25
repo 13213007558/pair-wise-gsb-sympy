@@ -183,7 +183,8 @@ from .solvers import (solve, solve_linear_system, solve_linear_system_LU,
         solve_triangulated, pde_separate, pde_separate_add, pde_separate_mul,
         pdsolve, classify_pde, checkpdesol, ode_order, reduce_inequalities,
         reduce_abs_inequality, reduce_abs_inequalities, solve_poly_inequality,
-        solve_rational_inequalities, solve_univariate_inequality, decompogen,
+        solve_rational_inequalities, solve_univariate_inequality,
+        solve_parametric_inequalities, decompogen,
         solveset, linsolve, linear_eq_to_matrix, nonlinsolve, substitution)
 
 from .matrices import (ShapeError, NonSquareMatrixError, GramSchmidt,
@@ -422,7 +423,8 @@ __all__ = [
     'checkpdesol', 'ode_order', 'reduce_inequalities',
     'reduce_abs_inequality', 'reduce_abs_inequalities',
     'solve_poly_inequality', 'solve_rational_inequalities',
-    'solve_univariate_inequality', 'decompogen', 'solveset', 'linsolve',
+    'solve_univariate_inequality', 'solve_parametric_inequalities',
+    'decompogen', 'solveset', 'linsolve',
     'linear_eq_to_matrix', 'nonlinsolve', 'substitution',
 
     # sympy.matrices

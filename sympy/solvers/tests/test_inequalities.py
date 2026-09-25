@@ -15,12 +15,14 @@ from sympy.functions.elementary.trigonometric import cos, sin, tan
 from sympy.integrals.integrals import Integral
 from sympy.logic.boolalg import And, Or
 from sympy.polys.polytools import Poly, PurePoly
-from sympy.sets.sets import FiniteSet, Interval, Union
+from sympy.sets.sets import FiniteSet, Interval, Union, Intersection
 from sympy.solvers.inequalities import (reduce_inequalities,
                                         solve_poly_inequality as psolve,
                                         reduce_rational_inequalities,
                                         solve_univariate_inequality as isolve,
                                         reduce_abs_inequality,
+                                        solve_parametric_inequalities,
+                                        _rational_between,
                                         _solve_inequality)
 from sympy.polys.rootoftools import rootof
 from sympy.solvers.solvers import solve
@@ -499,3 +501,127 @@ def test_issue_25738():
 
 def test_issue_25983():
     assert(reduce_inequalities(pi/Abs(x) <= 1) == ((pi <= x) & (x < oo)) | ((-oo < x) & (x <= -pi)))
+
+
+def test_solve_parametric_inequalities():
+    a = Symbol('a')
+
+    # the sense of the solution depends on the sign of the coefficient
+    assert solve_parametric_inequalities([a*x < 1], x, a) == [
+        (Interval.open(-oo, 0), Interval.open(1/a, oo)),
+        (FiniteSet(0), S.Reals),
+        (Interval.open(0, oo), Interval.open(-oo, 1/a))]
+    assert solve_parametric_inequalities(a*x <= 1, x, a) == [
+        (Interval.open(-oo, 0), Interval(1/a, oo)),
+        (FiniteSet(0), S.Reals),
+        (Interval.open(0, oo), Interval(-oo, 1/a))]
+
+    # degenerate constraint at the critical value
+    assert solve_parametric_inequalities([a*x < a], x, a) == [
+        (Interval.open(-oo, 0), Interval.open(1, oo)),
+        (FiniteSet(0), S.EmptySet),
+        (Interval.open(0, oo), Interval.open(-oo, 1))]
+
+    # boundaries of two inequalities cross at a = 0
+    assert solve_parametric_inequalities([x > a, x < 2*a], x, a) == [
+        (Interval.open(-oo, 0), S.EmptySet),
+        (FiniteSet(0), S.EmptySet),
+        (Interval.open(0, oo), Interval.open(a, 2*a))]
+
+    # parameter-only constraint
+    assert solve_parametric_inequalities([a < 1, x > 0], x, a) == [
+        (Interval.open(-oo, 1), Interval.open(0, oo)),
+        (FiniteSet(1), S.EmptySet),
+        (Interval.open(1, oo), S.EmptySet)]
+
+    # coefficient vanishing at two parameter values
+    assert solve_parametric_inequalities([(a**2 - 1)*x < 1], x, a) == [
+        (Interval.open(-oo, -1), Interval.open(-oo, 1/(a**2 - 1))),
+        (FiniteSet(-1), S.Reals),
+        (Interval.open(-1, 1), Interval.open(1/(a**2 - 1), oo)),
+        (FiniteSet(1), S.Reals),
+        (Interval.open(1, oo), Interval.open(-oo, 1/(a**2 - 1)))]
+
+    # identically coinciding boundaries
+    assert solve_parametric_inequalities([x >= a, x <= a], x, a) == [
+        (S.Reals, FiniteSet(a))]
+    assert solve_parametric_inequalities([x > a, x <= a], x, a) == [
+        (S.Reals, S.EmptySet)]
+
+    # no critical values
+    assert solve_parametric_inequalities([(a**2 + 1)*x < 1], x, a) == [
+        (S.Reals, Interval.open(-oo, 1/(a**2 + 1)))]
+
+    # constantly false constraint
+    assert solve_parametric_inequalities([a*x < a*x - 1], x, a) == [
+        (S.Reals, S.EmptySet)]
+
+    # boundaries crossing at algebraic parameter values
+    r1, r2 = (1 - sqrt(5))/2, (1 + sqrt(5))/2
+    assert solve_parametric_inequalities([x > a**2 - 1, x < a], x, a) == [
+        (Interval.open(-oo, r1), S.EmptySet),
+        (FiniteSet(r1), S.EmptySet),
+        (Interval.open(r1, r2), Interval.open(a**2 - 1, a)),
+        (FiniteSet(r2), S.EmptySet),
+        (Interval.open(r2, oo), S.EmptySet)]
+    assert solve_parametric_inequalities([x >= a**2 - 1, x <= a], x, a) == [
+        (Interval.open(-oo, r1), S.EmptySet),
+        (FiniteSet(r1), FiniteSet(r1)),
+        (Interval.open(r1, r2), Interval(a**2 - 1, a)),
+        (FiniteSet(r2), FiniteSet(r2)),
+        (Interval.open(r2, oo), S.EmptySet)]
+
+
+def test_solve_parametric_inequalities_raises():
+    a = Symbol('a')
+    raises(ValueError, lambda: solve_parametric_inequalities([x**2 < a], x, a))
+    raises(ValueError, lambda: solve_parametric_inequalities([Eq(x, a)], x, a))
+    raises(ValueError, lambda: solve_parametric_inequalities([Ne(x, a)], x, a))
+    raises(ValueError, lambda: solve_parametric_inequalities([x < 1/a], x, a))
+    raises(ValueError, lambda: solve_parametric_inequalities([sin(a)*x < 1], x, a))
+    raises(ValueError, lambda: solve_parametric_inequalities([x + y < a], x, a))
+    raises(ValueError, lambda: solve_parametric_inequalities([x < 1], x, x))
+    raises(TypeError, lambda: solve_parametric_inequalities([x < 1], x, 1))
+
+
+def test_solve_parametric_inequalities_against_solver():
+    a = Symbol('a')
+    systems = [
+        [a*x < 1],
+        [a*x <= 1],
+        [a*x > a],
+        [(a**2 - 2)*x < 1],
+        [(a**2 - 1)*x <= a - 1],
+        [(a**2 + 1)*x >= a],
+        [x > a, x < 2*a],
+        [x >= a, x <= a + 1, x < 2 - a],
+        [a*x + a**2 > 0, x <= 3],
+        [(a - 1)*x > a, (a + 1)*x < 2],
+        [x > a**2 - 1, x < a],
+        [x > a, x <= a],
+        [a < 2, x > a],
+        [a**2 > 1, a*x < 1],
+    ]
+    for ineqs in systems:
+        result = solve_parametric_inequalities(ineqs, x, a)
+        # the parameter sets partition the whole real line
+        assert Union(*[param_set for param_set, _ in result]) == S.Reals
+        for param_set, sol in result:
+            if isinstance(param_set, Interval):
+                samples = [_rational_between(param_set.left, param_set.right)]
+                assert samples[0].is_Rational
+            else:
+                samples = list(param_set)
+            for a0 in samples:
+                expected = S.Reals
+                for ie in ineqs:
+                    ie0 = ie.subs(a, a0)
+                    if ie0 is S.true:
+                        continue
+                    if ie0 is S.false:
+                        expected = S.EmptySet
+                        break
+                    expected = Intersection(expected,
+                        isolve(ie0, x, relational=False))
+                got = sol.subs(a, a0)
+                assert got.symmetric_difference(expected) == S.EmptySet
