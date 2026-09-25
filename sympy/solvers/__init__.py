@@ -31,6 +31,7 @@ from .deutils import ode_order
 
 from .inequalities import reduce_inequalities, reduce_abs_inequality, \
     reduce_abs_inequalities, solve_poly_inequality, solve_rational_inequalities, solve_univariate_inequality
+from .inequalities import solve_parametric_inequalities
 
 from .decompogen import decompogen
 
@@ -62,7 +63,7 @@ __all__ = [
 
     'reduce_inequalities', 'reduce_abs_inequality', 'reduce_abs_inequalities',
     'solve_poly_inequality', 'solve_rational_inequalities',
-    'solve_univariate_inequality',
+    'solve_univariate_inequality', 'solve_parametric_inequalities',
 
     'decompogen',
 

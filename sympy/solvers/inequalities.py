@@ -11,9 +11,12 @@ from sympy.core.symbol import Symbol, Dummy
 from sympy.sets.sets import Interval, FiniteSet, Union, Intersection
 from sympy.core.singleton import S
 from sympy.core.function import expand_mul
-from sympy.functions.elementary.complexes import Abs
+from sympy.core.numbers import oo
+from sympy.functions.elementary.complexes import Abs, sign
 from sympy.logic import And
-from sympy.polys import Poly, PolynomialError, parallel_poly_from_expr
+from sympy.polys import (Poly, PolynomialError, GeneratorsNeeded,
+    parallel_poly_from_expr, minpoly)
+from sympy.polys.rootoftools import CRootOf
 from sympy.polys.polyutils import _nsort
 from sympy.solvers.solveset import solvify, solveset
 from sympy.utilities.iterables import sift, iterable
@@ -990,3 +993,253 @@ def reduce_inequalities(inequalities, symbols=[]):
 
     # restore original symbols and return
     return rv.xreplace({v: k for k, v in recast.items()})
+
+
+_parametric_flip = {'<': '>', '>': '<', '<=': '>=', '>=': '<='}
+
+
+def _parametric_rel0(sgn, rel):
+    # truth value of "v rel 0" given sgn = sign(v)
+    if rel == '<':
+        return sgn < 0
+    if rel == '<=':
+        return sgn <= 0
+    if rel == '>':
+        return sgn > 0
+    return sgn >= 0
+
+
+def _parametric_combine(lowers, uppers, cmp):
+    # Intersect half-lines. Each bound is a tuple (endpoint, strict, aux)
+    # where endpoint is the expression used in the output and cmp compares
+    # two bounds by value (using aux), returning -1, 0 or 1.
+    def extreme(bounds, want_max):
+        best = bounds[0]
+        for b in bounds[1:]:
+            if (cmp(b, best) > 0) == want_max:
+                best = b
+        strict = any(b[1] for b in bounds if cmp(b, best) == 0)
+        return best, strict
+
+    lower = extreme(lowers, True) if lowers else None
+    upper = extreme(uppers, False) if uppers else None
+
+    if lower is not None and upper is not None:
+        lend, lstrict = lower[0][0], lower[1]
+        uend, ustrict = upper[0][0], upper[1]
+        c = cmp(lower[0], upper[0])
+        if c > 0:
+            return S.EmptySet
+        if c == 0:
+            if lstrict or ustrict:
+                return S.EmptySet
+            return FiniteSet(lend)
+        return Interval(lend, uend, lstrict, ustrict)
+    if lower is not None:
+        return Interval(lower[0][0], oo, lower[1], True)
+    if upper is not None:
+        return Interval(-oo, upper[0][0], True, upper[1])
+    return S.Reals
+
+
+def _parametric_key_cmp(b1, b2):
+    k1, k2 = b1[2], b2[2]
+    return sign(k1 - k2)
+
+
+def _parametric_sample_between(c1, c2):
+    # a rational number strictly between two distinct real algebraic numbers
+    dx = S.One
+    while True:
+        q1 = c1 if c1.is_Rational else c1.eval_rational(dx)
+        q2 = c2 if c2.is_Rational else c2.eval_rational(dx)
+        if q1 + dx < q2 - dx:
+            return (q1 + q2)/2
+        dx /= 2
+
+
+def _parametric_coefficient(expr, a, x):
+    try:
+        p = Poly(expr, a)
+    except (GeneratorsNeeded, PolynomialError):
+        raise ValueError(
+            'coefficients of %s must be polynomials in the parameter %s;'
+            ' got %s' % (x, a, expr))
+    if not (p.domain.is_ZZ or p.domain.is_QQ):
+        raise ValueError(
+            'coefficients of %s must be polynomials in the parameter %s'
+            ' with rational coefficients; got %s' % (x, a, expr))
+    return p
+
+
+def solve_parametric_inequalities(inequalities, x, a):
+    r"""Solve a system of inequalities for ``x`` in terms of a real parameter ``a``.
+
+    Each inequality must be at most linear in ``x`` with coefficients that
+    are polynomials in ``a`` with rational coefficients. Both strict
+    (``<``, ``>``) and non-strict (``<=``, ``>=``) inequalities are accepted
+    and several inequalities may be given at once.
+
+    The real parameter line is split at every critical value of ``a`` where
+    the shape of the solution set can change: roots of the coefficients of
+    ``x`` (where an inequality degenerates or flips direction) and values
+    where two interval boundaries cross. The result is a list of pairs
+    ``(param_set, solution_set)`` covering the whole real line: for each
+    open parameter interval the solution is an exact interval for ``x``
+    whose endpoints are expressions in ``a``; each critical value is
+    treated separately with an explicit solution set. Parameter regions
+    with no solution are included with ``S.EmptySet`` as the solution.
+
+    Examples
+    ========
+
+    >>> from sympy.solvers.inequalities import solve_parametric_inequalities
+    >>> from sympy.abc import x, a
+
+    >>> solve_parametric_inequalities([a*x < 1], x, a)
+    [(Interval.open(-oo, 0), Interval.open(1/a, oo)), ({0}, Reals), (Interval.open(0, oo), Interval.open(-oo, 1/a))]
+
+    >>> solve_parametric_inequalities([x >= a, x <= 1], x, a)
+    [(Interval.open(-oo, 1), Interval(a, 1)), ({1}, {1}), (Interval.open(1, oo), EmptySet)]
+
+    See Also
+    ========
+    solve_univariate_inequality, reduce_inequalities
+    """
+    if isinstance(inequalities, Relational):
+        inequalities = [inequalities]
+    elif isinstance(inequalities, And):
+        inequalities = list(inequalities.args)
+
+    constraints = []
+    for ie in inequalities:
+        if ie is S.true:
+            continue
+        if ie is S.false:
+            return [(S.Reals, S.EmptySet)]
+        if not isinstance(ie, Relational) or ie.rel_op not in ('<', '<=', '>', '>='):
+            raise ValueError(
+                'expected strict or non-strict inequalities, got %s' % ie)
+        expr = (ie.lhs - ie.rhs).expand()
+        try:
+            p = Poly(expr, x)
+        except (GeneratorsNeeded, PolynomialError):
+            raise ValueError(
+                'each inequality must be polynomial and at most linear in'
+                ' %s; got %s' % (x, ie))
+        if p.degree() > 1:
+            raise ValueError(
+                'each inequality must be at most linear in %s; got %s' % (x, ie))
+        f = _parametric_coefficient(expr.coeff(x, 1), a, x)
+        g = _parametric_coefficient(expr.coeff(x, 0), a, x)
+        if f.is_zero and g.degree() < 1:
+            if not _parametric_rel0(sign(g.as_expr()), ie.rel_op):
+                return [(S.Reals, S.EmptySet)]
+            continue
+        constraints.append((f, g, ie.rel_op))
+
+    if not constraints:
+        return [(S.Reals, S.Reals)]
+
+    # Critical parameter values: roots of the coefficients of x (sign
+    # changes/degeneracy), roots of the constant parts of degenerate
+    # constraints, and crossings of any two interval boundaries.
+    critical_polys = []
+    for f, g, rel in constraints:
+        critical_polys.append(g if f.is_zero else f)
+    for (f1, g1, _), (f2, g2, _) in itertools.combinations(constraints, 2):
+        n = f1*g2 - f2*g1
+        if not n.is_zero:
+            critical_polys.append(n)
+
+    product = Poly(1, a)
+    for p in critical_polys:
+        product = product*p
+    product = product.sqf_part()
+    if product.degree() < 1:
+        criticals, display = [], []
+    else:
+        criticals = CRootOf.real_roots(product, radicals=False)
+        display = CRootOf.real_roots(product, radicals=True)
+
+    points = [None] + list(criticals) + [None]
+    samples = []
+    for lo, hi in zip(points[:-1], points[1:]):
+        if lo is None and hi is None:
+            samples.append(S.Zero)
+        elif lo is None:
+            samples.append(hi - 1 if hi.is_Rational else hi.eval_rational(S.One) - 1)
+        elif hi is None:
+            samples.append(lo + 1 if lo.is_Rational else lo.eval_rational(S.One) + 1)
+        else:
+            samples.append(_parametric_sample_between(lo, hi))
+
+    def region_solution(sample):
+        lowers, uppers = [], []
+        for f, g, rel in constraints:
+            if f.is_zero:
+                if not _parametric_rel0(sign(g.eval(sample)), rel):
+                    return S.EmptySet
+                continue
+            s = sign(f.eval(sample))
+            endpoint = -g.as_expr()/f.as_expr()
+            key = -g.eval(sample)/f.eval(sample)
+            if s < 0:
+                rel = _parametric_flip[rel]
+            bound = (endpoint, rel in ('<', '>'), key)
+            if rel in ('<', '<='):
+                uppers.append(bound)
+            else:
+                lowers.append(bound)
+        return _parametric_combine(lowers, uppers, _parametric_key_cmp)
+
+    def critical_solution(c, c_display, minpoly_c, left_sample):
+        def poly_sign(p):
+            if p.degree() < 1:
+                return sign(p.as_expr())
+            if c.is_Rational:
+                return sign(p.eval(c))
+            if not p.gcd(minpoly_c).is_one:
+                return 0
+            return sign(p.eval(left_sample))
+
+        def cmp_bounds(b1, b2):
+            _, _, (f1, g1, s1) = b1
+            _, _, (f2, g2, s2) = b2
+            n = g2*f1 - g1*f2
+            if n.is_zero:
+                return 0
+            return poly_sign(n)*s1*s2
+
+        lowers, uppers = [], []
+        for f, g, rel in constraints:
+            s = poly_sign(f)
+            if s == 0:
+                if not _parametric_rel0(poly_sign(g), rel):
+                    return S.EmptySet
+                continue
+            endpoint = (-g.as_expr()/f.as_expr()).subs(a, c_display)
+            if s < 0:
+                rel = _parametric_flip[rel]
+            bound = (endpoint, rel in ('<', '>'), (f, g, s))
+            if rel in ('<', '<='):
+                uppers.append(bound)
+            else:
+                lowers.append(bound)
+        return _parametric_combine(lowers, uppers, cmp_bounds)
+
+    result = []
+    for k in range(len(criticals) + 1):
+        if not criticals:
+            region = S.Reals
+        else:
+            lo = display[k - 1] if k > 0 else -oo
+            hi = display[k] if k < len(criticals) else oo
+            region = Interval.open(lo, hi)
+        result.append((region, region_solution(samples[k])))
+        if k < len(criticals):
+            c = criticals[k]
+            minpoly_c = None if c.is_Rational else Poly(minpoly(c, a), a)
+            result.append((FiniteSet(display[k]),
+                critical_solution(c, display[k], minpoly_c, samples[k])))
+    return result

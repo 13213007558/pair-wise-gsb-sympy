@@ -15,7 +15,7 @@ from sympy.functions.elementary.trigonometric import cos, sin, tan
 from sympy.integrals.integrals import Integral
 from sympy.logic.boolalg import And, Or
 from sympy.polys.polytools import Poly, PurePoly
-from sympy.sets.sets import FiniteSet, Interval, Union
+from sympy.sets.sets import FiniteSet, Interval, Union, Intersection
 from sympy.solvers.inequalities import (reduce_inequalities,
                                         solve_poly_inequality as psolve,
                                         reduce_rational_inequalities,
@@ -499,3 +499,130 @@ def test_issue_25738():
 
 def test_issue_25983():
     assert(reduce_inequalities(pi/Abs(x) <= 1) == ((pi <= x) & (x < oo)) | ((-oo < x) & (x <= -pi)))
+
+
+def test_solve_parametric_inequalities():
+    from sympy.solvers.inequalities import solve_parametric_inequalities
+    a = Symbol('a')
+
+    # the sign of the coefficient decides the direction of the solution
+    assert solve_parametric_inequalities([a*x < 1], x, a) == [
+        (Interval.open(-oo, 0), Interval.open(1/a, oo)),
+        (FiniteSet(0), S.Reals),
+        (Interval.open(0, oo), Interval.open(-oo, 1/a)),
+    ]
+    # degenerates to a true constraint at a = 0
+    assert solve_parametric_inequalities([a*x <= 2*a], x, a) == [
+        (Interval.open(-oo, 0), Interval(2, oo)),
+        (FiniteSet(0), S.Reals),
+        (Interval.open(0, oo), Interval(-oo, 2)),
+    ]
+    # degenerates to a false constraint at a = 0
+    assert solve_parametric_inequalities([a*x < a], x, a) == [
+        (Interval.open(-oo, 0), Interval.open(1, oo)),
+        (FiniteSet(0), S.EmptySet),
+        (Interval.open(0, oo), Interval.open(-oo, 1)),
+    ]
+    # the crossing of the two boundaries is critical
+    assert solve_parametric_inequalities([x >= a, x <= 1], x, a) == [
+        (Interval.open(-oo, 1), Interval(a, 1)),
+        (FiniteSet(1), FiniteSet(1)),
+        (Interval.open(1, oo), S.EmptySet),
+    ]
+    # a constraint without x only restricts the parameter
+    assert solve_parametric_inequalities([x < a, a*(a - 1) > 0], x, a) == [
+        (Interval.open(-oo, 0), Interval.open(-oo, a)),
+        (FiniteSet(0), S.EmptySet),
+        (Interval.open(0, 1), S.EmptySet),
+        (FiniteSet(1), S.EmptySet),
+        (Interval.open(1, oo), Interval.open(-oo, a)),
+    ]
+    # irrational critical values
+    assert solve_parametric_inequalities([(a**2 - 2)*x < 1], x, a) == [
+        (Interval.open(-oo, -sqrt(2)), Interval.open(-oo, 1/(a**2 - 2))),
+        (FiniteSet(-sqrt(2)), S.Reals),
+        (Interval.open(-sqrt(2), sqrt(2)), Interval.open(1/(a**2 - 2), oo)),
+        (FiniteSet(sqrt(2)), S.Reals),
+        (Interval.open(sqrt(2), oo), Interval.open(-oo, 1/(a**2 - 2))),
+    ]
+    # critical value that cannot be expressed in radicals
+    r = rootof(a**5 - a - 1, a, 0)
+    assert solve_parametric_inequalities([(a**5 - a - 1)*x < 1], x, a) == [
+        (Interval.open(-oo, r), Interval.open(1/(a**5 - a - 1), oo)),
+        (FiniteSet(r), S.Reals),
+        (Interval.open(r, oo), Interval.open(-oo, 1/(a**5 - a - 1))),
+    ]
+    # trivial and single-relation inputs
+    assert solve_parametric_inequalities([x < 1], x, a) == [
+        (S.Reals, Interval.open(-oo, 1))]
+    assert solve_parametric_inequalities([a*x < 1, S.true], x, a) == \
+        solve_parametric_inequalities(a*x < 1, x, a)
+    assert solve_parametric_inequalities([S.false], x, a) == [
+        (S.Reals, S.EmptySet)]
+    raises(ValueError, lambda:
+        solve_parametric_inequalities([a*x**2 < 1], x, a))
+    raises(ValueError, lambda:
+        solve_parametric_inequalities([x/a < 1], x, a))
+    raises(ValueError, lambda:
+        solve_parametric_inequalities([y*x < 1], x, a))
+    raises(ValueError, lambda:
+        solve_parametric_inequalities([Eq(a*x, 1)], x, a))
+
+
+def test_solve_parametric_inequalities_against_isolve():
+    # Cross-check against solve_univariate_inequality: pick a rational
+    # sample in each open parameter region and substitute it back, and
+    # check every critical parameter value individually.
+    from sympy.solvers.inequalities import solve_parametric_inequalities
+    from sympy.functions.elementary.integers import floor, ceiling
+    from sympy.simplify.radsimp import radsimp
+    a = Symbol('a')
+
+    def rational_sample(iv):
+        lo, hi = iv.inf, iv.sup
+        if lo is -oo:
+            return S.Zero if hi is oo else (hi - 1 if hi.is_Rational else floor(hi))
+        if hi is oo:
+            return lo + 1 if lo.is_Rational else ceiling(lo)
+        k = 1
+        while True:
+            j = floor(lo*k) + 1
+            if j < hi*k:
+                return Rational(j, k)
+            k *= 2
+
+    def canonical(s):
+        # normalize endpoints so that equal algebraic numbers written in
+        # different forms compare equal
+        if isinstance(s, Interval):
+            return Interval(radsimp(s.start), radsimp(s.end),
+                s.left_open, s.right_open)
+        if isinstance(s, FiniteSet):
+            return FiniteSet(*[radsimp(e) for e in s.args])
+        return s
+
+    systems = [
+        [a*x < 1],
+        [a*x <= 2*a],
+        [a*x < a],
+        [x >= a, x <= 1],
+        [x < a, a*(a - 1) > 0],
+        [(a**2 - 2)*x < 1],
+        [(a - 1)*x + a > 0, x < 2],
+        [(a**2 - 1)*x <= a - 1],
+        [a*x + (a - 1) >= 0, (a + 1)*x <= 3, x > -2],
+        [a*x <= 1, x >= a - 2],
+    ]
+    for system in systems:
+        result = solve_parametric_inequalities(system, x, a)
+        # the parameter pieces partition the whole real line
+        assert Union(*[param_set for param_set, _ in result]) == S.Reals
+        for param_set, x_set in result:
+            if isinstance(param_set, FiniteSet):
+                points = list(param_set)
+            else:
+                points = [rational_sample(param_set)]
+            for pt in points:
+                expected = Intersection(*[canonical(isolve(
+                    ie.subs(a, pt), x, relational=False)) for ie in system])
+                assert canonical(x_set.subs(a, pt)) == canonical(expected)

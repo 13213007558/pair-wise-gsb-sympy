@@ -184,7 +184,8 @@ from .solvers import (solve, solve_linear_system, solve_linear_system_LU,
         pdsolve, classify_pde, checkpdesol, ode_order, reduce_inequalities,
         reduce_abs_inequality, reduce_abs_inequalities, solve_poly_inequality,
         solve_rational_inequalities, solve_univariate_inequality, decompogen,
-        solveset, linsolve, linear_eq_to_matrix, nonlinsolve, substitution)
+        solveset, linsolve, linear_eq_to_matrix, nonlinsolve, substitution,
+        solve_parametric_inequalities)
 
 from .matrices import (ShapeError, NonSquareMatrixError, GramSchmidt,
         casoratian, diag, eye, hessian, jordan_cell, list2numpy, matrix2numpy,
@@ -424,6 +425,7 @@ __all__ = [
     'solve_poly_inequality', 'solve_rational_inequalities',
     'solve_univariate_inequality', 'decompogen', 'solveset', 'linsolve',
     'linear_eq_to_matrix', 'nonlinsolve', 'substitution',
+    'solve_parametric_inequalities',
 
     # sympy.matrices
     'ShapeError', 'NonSquareMatrixError', 'GramSchmidt', 'casoratian', 'diag',
