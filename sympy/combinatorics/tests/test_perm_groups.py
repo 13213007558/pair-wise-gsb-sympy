@@ -1,5 +1,8 @@
 from __future__ import annotations
 from sympy.core.containers import Tuple
+import random
+from itertools import product
+from sympy.combinatorics.group_constructs import DirectProduct
 from sympy.combinatorics.generators import rubik_cube_generators
 from sympy.combinatorics.homomorphisms import is_isomorphic
 from sympy.combinatorics.named_groups import SymmetricGroup, CyclicGroup,\
@@ -10,7 +13,7 @@ from sympy.combinatorics.permutations import Permutation
 from sympy.combinatorics.polyhedron import tetrahedron as Tetra, cube
 from sympy.combinatorics.testutil import _verify_bsgs, _verify_centralizer,\
     _verify_normal_closure
-from sympy.testing.pytest import skip, XFAIL, slow
+from sympy.testing.pytest import skip, raises, XFAIL, slow
 
 rmul = Permutation.rmul
 
@@ -1223,6 +1226,96 @@ def test_composition_series():
     assert is_isomorphic(series[1], CyclicGroup(4))
     assert is_isomorphic(series[2], CyclicGroup(2))
     assert series[3].is_trivial
+
+def _brute_count_colorings(G, quotas, allowed):
+    # count orbits of valid colorings by enumerating all of them
+    degree = G.degree
+    valid = []
+    for assign in product(*[sorted(a) for a in allowed]):
+        if all(assign.count(c) == q for c, q in quotas.items()):
+            valid.append(assign)
+    stabilizing = [g for g in G.generate() if
+                   all(allowed[g(i)] == allowed[i] for i in range(degree))]
+    parent = list(range(len(valid)))
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    index = {a: i for i, a in enumerate(valid)}
+    for g in stabilizing:
+        ginv = g**-1
+        for a in valid:
+            b = tuple(a[ginv(i)] for i in range(degree))
+            j = index.get(b)
+            if j is not None:
+                parent[find(index[a])] = find(j)
+    return len({find(i) for i in range(len(valid))})
+
+
+def test_count_colorings():
+    # necklaces of 4 beads with two beads of each color, up to rotation
+    assert CyclicGroup(4).count_colorings({0: 2, 1: 2}) == 2
+    assert CyclicGroup(6).count_colorings({0: 3, 1: 3}) == 4
+    # ... and up to rotation and reflection
+    assert DihedralGroup(6).count_colorings({0: 3, 1: 3}) == 3
+    # without restrictions all colorings with the same quotas are
+    # equivalent under the symmetric group
+    assert SymmetricGroup(5).count_colorings({'a': 3, 'b': 2}) == 1
+    # counts may be given as a sequence for the colors 0, 1, ...
+    assert SymmetricGroup(5).count_colorings([3, 2]) == 1
+    # zero quotas and quotas that do not add up to the degree
+    assert SymmetricGroup(3).count_colorings({'a': 3, 'b': 0}) == 1
+    assert CyclicGroup(4).count_colorings({0: 3, 1: 3}) == 0
+    # restricted color sets: only the subgroup preserving the
+    # restrictions acts on the valid colorings
+    G = CyclicGroup(4)
+    allowed = [{0}, {0, 1}, {0, 1}, {0, 1}]
+    assert G.count_colorings({0: 2, 1: 2}, allowed_colors=allowed) == 3
+    # allowed_colors as a dict; points not mentioned allow every color
+    assert G.count_colorings({0: 2, 1: 2}, allowed_colors={0: {0}}) == 3
+    # a point with no allowed colors makes the quotas impossible
+    assert G.count_colorings({0: 2, 1: 2},
+        allowed_colors=[set(), {0, 1}, {0, 1}, {0, 1}]) == 0
+    # colors not appearing in color_counts are treated as having count 0
+    assert CyclicGroup(3).count_colorings({0: 3},
+        allowed_colors=[{0, 1}, {0}, {0}]) == 1
+    raises(ValueError, lambda: G.count_colorings({0: -1, 1: 5}))
+    raises(ValueError, lambda: G.count_colorings({0: 2.5, 1: 2}))
+    raises(ValueError, lambda: G.count_colorings({0: 2, 1: 2},
+        allowed_colors=[{0, 1}]))
+
+
+def test_count_colorings_brute_force():
+    rng = random.Random(17)
+    for _ in range(20):
+        n = rng.randint(1, 5)
+        ncolors = rng.randint(1, 3)
+        gens = []
+        for _ in range(rng.randint(1, 2)):
+            p = list(range(n))
+            rng.shuffle(p)
+            gens.append(Permutation(p))
+        G = PermutationGroup(gens)
+        allowed = [set(rng.sample(range(ncolors), rng.randint(1, ncolors)))
+                   for _ in range(n)]
+        parts = [0]*ncolors
+        for _ in range(n):
+            parts[rng.randrange(ncolors)] += 1
+        quotas = dict(enumerate(parts))
+        assert G.count_colorings(quotas, allowed_colors=allowed) == \
+            _brute_count_colorings(G, quotas, allowed)
+
+
+def test_count_colorings_large_group():
+    # DirectProduct(S_4, S_4) acts on two blocks of 4 points; an orbit of
+    # colorings with four beads of each color is determined by the number
+    # of beads of color 0 in the first block
+    G = DirectProduct(SymmetricGroup(4), SymmetricGroup(4))
+    assert G.count_colorings({0: 4, 1: 4}) == 5
+    # 40320 group elements but only 8 points; the colorings themselves
+    # are never enumerated
+    assert SymmetricGroup(8).count_colorings({0: 3, 1: 3, 2: 2}) == 1
 
 
 def test_is_symmetric():

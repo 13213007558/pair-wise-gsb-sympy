@@ -803,6 +803,203 @@ class PermutationGroup(Basic):
         series.append(der[-1])
         return series
 
+    def count_colorings(self, color_counts, allowed_colors=None):
+        r"""Count the distinct colorings of the points acted on by the group.
+
+        Explanation
+        ===========
+
+        A coloring assigns one of a fixed set of colors to each of the
+        ``degree`` points the group acts on, using every color exactly the
+        number of times prescribed by ``color_counts``.  Two colorings are
+        considered the same if one is carried to the other by a group
+        element, and the number of equivalence classes (orbits) is
+        returned.
+
+        When ``allowed_colors`` restricts the set of colors available at
+        each point, only the subgroup of elements that map every point to
+        a point with the same allowed colors acts on the valid colorings.
+        That subgroup is computed automatically and the count is taken
+        with respect to it.  Colors have fixed identities; no quotient by
+        permutations of the colors is taken.
+
+        The count uses Burnside's lemma over the relevant subgroup: for
+        each element the colorings fixed by it are constant on its cycles,
+        so their number is a coefficient of a product of small polynomials
+        in the color multiplicities.  The colorings themselves are never
+        enumerated, so the cost depends on the order of the group rather
+        than on the number of colorings.
+
+        Parameters
+        ==========
+
+        color_counts : dict or sequence
+            If a dict, maps each color to the number of points that must
+            receive it.  If a sequence, its entries are the counts for the
+            colors ``0, 1, ...``.  Counts must be nonnegative integers and
+            add up to the degree of the group; otherwise the count is 0.
+            Colors with count zero are allowed (they simply cannot be
+            used).
+        allowed_colors : dict, sequence or None
+            The colors permitted at each point.  A sequence of length
+            ``degree`` gives an iterable of allowed colors for every
+            point; a dict maps points to such iterables (points not
+            present allow every color).  The default ``None`` allows every
+            color at every point.  Colors not appearing in
+            ``color_counts`` are treated as having count zero.
+
+        Returns
+        =======
+
+        int
+            The number of distinct colorings.
+
+        Examples
+        ========
+
+        >>> from sympy.combinatorics.named_groups import (CyclicGroup,
+        ...     SymmetricGroup)
+
+        Necklaces of four beads with two beads of each of two colors,
+        counted up to rotation:
+
+        >>> CyclicGroup(4).count_colorings({0: 2, 1: 2})
+        2
+
+        With no restrictions the symmetric group makes every coloring
+        with the same multiplicities equivalent:
+
+        >>> SymmetricGroup(5).count_colorings({'a': 3, 'b': 2})
+        1
+
+        Restricting the colors allowed at some points reduces the acting
+        group to the subgroup preserving those restrictions.  Here only
+        the identity of the cyclic group keeps point 0 the only point
+        that must use color 0, so the three valid colorings are all
+        distinct (without the restriction there would be 2):
+
+        >>> G = CyclicGroup(4)
+        >>> G.count_colorings({0: 2, 1: 2},
+        ...     allowed_colors=[{0}, {0, 1}, {0, 1}, {0, 1}])
+        3
+
+        Colors with zero prescribed count and quotas that cannot be met
+        are handled:
+
+        >>> SymmetricGroup(3).count_colorings({'a': 3, 'b': 0})
+        1
+        >>> CyclicGroup(4).count_colorings({0: 3, 1: 3})
+        0
+
+        See Also
+        ========
+
+        subgroup_search
+
+        """
+        degree = self.degree
+        if isinstance(color_counts, dict):
+            quotas = dict(color_counts)
+        else:
+            quotas = dict(enumerate(color_counts))
+        for color, count in quotas.items():
+            if not isinstance(count, int) or isinstance(count, bool):
+                try:
+                    as_int = int(count)
+                except TypeError:
+                    raise ValueError(
+                        "color counts must be nonnegative integers")
+                if as_int != count:
+                    raise ValueError(
+                        "color counts must be nonnegative integers")
+                count = as_int
+            if count < 0:
+                raise ValueError("color counts must be nonnegative integers")
+            quotas[color] = count
+        if sum(quotas.values()) != degree:
+            return 0
+
+        colors = list(quotas)
+        if allowed_colors is None:
+            allowed = [frozenset(colors)]*degree
+        elif isinstance(allowed_colors, dict):
+            all_colors = frozenset(colors)
+            allowed = [frozenset(allowed_colors.get(i, all_colors))
+                       for i in range(degree)]
+        else:
+            allowed = [frozenset(point_colors) for point_colors in
+                       allowed_colors]
+            if len(allowed) != degree:
+                raise ValueError(
+                    "allowed_colors must give colors for each of the "
+                    "%d points" % degree)
+        if not all(allowed):
+            return 0
+
+        if len(set(allowed)) == 1 or self.is_trivial:
+            subgroup = self
+        else:
+            base, strong_gens = self.schreier_sims_incremental()
+
+            def prop(g):
+                return all(allowed[g(i)] == allowed[i]
+                           for i in range(degree))
+
+            def make_test(l):
+                def test(computed_words):
+                    g = computed_words[l]
+                    return all(allowed[g(base[j])] == allowed[base[j]]
+                               for j in range(l + 1))
+                return test
+
+            tests = [make_test(l) for l in range(len(base))]
+            subgroup = self.subgroup_search(prop, base=base,
+                strong_gens=strong_gens, tests=tests)
+
+        active = [c for c in colors if quotas[c] > 0]
+        active_set = frozenset(active)
+        allowed_active = [point_colors & active_set for point_colors in
+                          allowed]
+        quota_vec = tuple(quotas[c] for c in active)
+        color_index = {c: i for i, c in enumerate(active)}
+        zero = (0,)*len(active)
+
+        cache = {}
+        total = 0
+        for g in subgroup.generate():
+            key_cycles = []
+            for cyc in g.full_cyclic_form:
+                options = allowed_active[cyc[0]]
+                for i in cyc[1:]:
+                    options = options & allowed_active[i]
+                    if not options:
+                        break
+                if not options:
+                    break
+                key_cycles.append((len(cyc), options))
+            else:
+                key = tuple(sorted(key_cycles))
+                if key not in cache:
+                    poly = {zero: 1}
+                    for length, options in key:
+                        new_poly = {}
+                        for exp, coeff in poly.items():
+                            for c in options:
+                                i = color_index[c]
+                                if exp[i] + length > quota_vec[i]:
+                                    continue
+                                new_exp = list(exp)
+                                new_exp[i] += length
+                                new_exp = tuple(new_exp)
+                                new_poly[new_exp] = (new_poly.get(new_exp, 0)
+                                                     + coeff)
+                        poly = new_poly
+                        if not poly:
+                            break
+                    cache[key] = poly.get(quota_vec, 0)
+                total += cache[key]
+        return int(total // subgroup.order())
+
     def coset_transversal(self, H):
         """Return a transversal of the right cosets of self by its subgroup H
         using the second method described in [1], Subsection 4.6.7
