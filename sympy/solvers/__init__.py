@@ -36,6 +36,8 @@ from .decompogen import decompogen
 
 from .solveset import solveset, linsolve, linear_eq_to_matrix, nonlinsolve, substitution
 
+from .piecewise_inverse import piecewise_inverse, PiecewiseInverse, InverseBranch
+
 from .simplex import lpmin, lpmax, linprog
 
 # This is here instead of sympy/sets/__init__.py to avoid circular import issues
@@ -68,6 +70,8 @@ __all__ = [
 
     'solveset', 'linsolve', 'linear_eq_to_matrix', 'nonlinsolve',
     'substitution',
+
+    'piecewise_inverse', 'PiecewiseInverse', 'InverseBranch',
 
     # This is here instead of sympy/sets/__init__.py to avoid circular import issues
     'Complexes',
