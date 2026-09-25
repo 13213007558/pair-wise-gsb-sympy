@@ -38,6 +38,8 @@ from .solveset import solveset, linsolve, linear_eq_to_matrix, nonlinsolve, subs
 
 from .simplex import lpmin, lpmax, linprog
 
+from .piecewise_inverse import piecewise_inverse, PiecewiseInverse, InverseBranch
+
 # This is here instead of sympy/sets/__init__.py to avoid circular import issues
 from ..core.singleton import S
 Complexes = S.Complexes
@@ -73,4 +75,8 @@ __all__ = [
     'Complexes',
 
     'lpmin', 'lpmax', 'linprog'
+]
+
+__all__ += [
+    'piecewise_inverse', 'PiecewiseInverse', 'InverseBranch',
 ]

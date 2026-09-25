@@ -56,6 +56,19 @@ is the symbol that we want to solve the equation for.
 
 .. autofunction:: sympy.solvers.solvers::unrad
 
+Piecewise Inverse Relations
+---------------------------
+
+.. module:: sympy.solvers.piecewise_inverse
+
+.. autofunction:: piecewise_inverse
+
+.. autoclass:: PiecewiseInverse
+    :members:
+
+.. autoclass:: InverseBranch
+    :members:
+
 Univariate Equations
 --------------------
 
