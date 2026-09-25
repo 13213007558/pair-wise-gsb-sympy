@@ -25,7 +25,8 @@ from sympy.functions.elementary.hyperbolic import (sinh, cosh, tanh, coth,
         sech, csch, asinh, acosh, atanh, acoth, asech, acsch)
 from sympy.functions.elementary.integers import floor, ceiling, frac
 from sympy.functions.elementary.piecewise import (Piecewise, piecewise_fold,
-                                                  piecewise_exclusive)
+                                                  piecewise_exclusive,
+                                                  distributional_diff)
 from sympy.functions.special.error_functions import (erf, erfc, erfi, erf2,
         erfinv, erfcinv, erf2inv, Ei, expint, E1, li, Li, Si, Ci, Shi, Chi,
         fresnels, fresnelc, owens_t)
@@ -79,6 +80,7 @@ __all__ = [
     'floor', 'ceiling', 'frac',
 
     'Piecewise', 'piecewise_fold', 'piecewise_exclusive',
+    'distributional_diff',
 
     'erf', 'erfc', 'erfi', 'erf2', 'erfinv', 'erfcinv', 'erf2inv', 'Ei',
     'expint', 'E1', 'li', 'Li', 'Si', 'Ci', 'Shi', 'Chi', 'fresnels',

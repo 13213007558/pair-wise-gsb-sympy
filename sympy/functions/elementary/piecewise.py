@@ -1,5 +1,5 @@
 from __future__ import annotations
-from sympy.core import S, diff, Tuple, Dummy, Mul
+from sympy.core import S, Add, diff, Tuple, Dummy, Mul
 from sympy.core.basic import Basic, as_Basic
 from sympy.core.function import DefinedFunction
 from sympy.core.numbers import Rational, NumberSymbol, _illegal
@@ -7,6 +7,8 @@ from sympy.core.parameters import global_parameters
 from sympy.core.relational import (Lt, Gt, Eq, Ne, Relational,
     _canonical, _canonical_coeff)
 from sympy.core.sorting import ordered
+from sympy.core.symbol import Symbol
+from sympy.core.sympify import sympify
 from sympy.functions.elementary.miscellaneous import Max, Min
 from sympy.logic.boolalg import (And, Boolean, distribute_and_over_or, Not,
     true, false, Or, ITE, simplify_logic, to_cnf, distribute_or_over_and)
@@ -1520,3 +1522,223 @@ def piecewise_exclusive(expr, *, skip_nan=False, deep=True):
         return make_exclusive(*expr.args)
     else:
         return expr
+
+
+def _as_interval_list(s):
+    """Return the nondegenerate intervals making up the set ``s``."""
+    from sympy.sets.sets import Interval, Union, FiniteSet
+    if s is S.EmptySet or isinstance(s, FiniteSet):
+        return []
+    if isinstance(s, Interval):
+        if s.left == s.right:
+            return []
+        return [s]
+    if isinstance(s, Union):
+        intervals = []
+        for arg in s.args:
+            intervals.extend(_as_interval_list(arg))
+        return intervals
+    raise ValueError(filldedent('''
+        Conditions of a Piecewise must define subsets of the real
+        line that are unions of intervals; got %s.''' % s))
+
+
+def _real_line_pieces(pw, x):
+    """Return ``(expr, interval)`` pairs for ``pw`` as a function of ``x``.
+
+    The intervals are disjoint, sorted, and cover the real line up to
+    finitely many isolated points.
+    """
+    from sympy.sets.sets import FiniteSet, Intersection
+    remaining = S.Reals
+    pieces = []
+    for e, c in pw.args:
+        if c is true:
+            dom = S.Reals
+        else:
+            if c.free_symbols - {x}:
+                raise ValueError(filldedent('''
+                    Conditions of the Piecewise may only depend on the
+                    variable of differentiation; got %s.''' % c))
+            try:
+                dom = c.as_set()
+            except AttributeError:
+                raise ValueError(filldedent('''
+                    Conditions of the Piecewise must be inequalities
+                    (or Boolean combinations of them) in %s; got
+                    %s.''' % (x, c)))
+        iv = Intersection(dom, remaining)
+        for s in _as_interval_list(iv):
+            pieces.append((e, s))
+        remaining = remaining - iv
+    if remaining is not S.EmptySet and not isinstance(remaining, FiniteSet):
+        raise ValueError(filldedent('''
+            The Piecewise must be defined on the whole real line (up to
+            isolated points); it is undefined on %s.''' % remaining))
+    pieces.sort(key=lambda p: (p[1].left, p[1].right))
+    for _, iv in pieces:
+        for p in (iv.left, iv.right):
+            if p.is_finite and not p.is_comparable:
+                raise ValueError(filldedent('''
+                    Breakpoints of the pieces must be comparable real
+                    numbers; got %s.''' % p))
+    return pieces
+
+
+def _check_rational_piece(e, x, iv):
+    """Check that ``e`` is a rational function of ``x`` without poles in
+    the closure of the interval ``iv``."""
+    from sympy.sets.sets import Interval
+    from sympy.polys.rationaltools import together
+    from sympy.simplify.radsimp import fraction
+    from sympy.solvers.solveset import solveset
+    if not e.is_rational_function(x):
+        raise ValueError(filldedent('''
+            Only pieces that are polynomials or rational functions in
+            %s are supported; got %s.''' % (x, e)))
+    den = fraction(together(e))[1]
+    if den.has(x):
+        poles = solveset(den, x, domain=Interval(iv.left, iv.right))
+        if not poles.is_FiniteSet:
+            raise ValueError(filldedent('''
+                Could not determine the poles of %s in %s.'''
+                % (e, iv)))
+        if poles:
+            raise ValueError(filldedent('''
+                The piece %s has poles at %s inside its domain %s;
+                poles within a piece are not supported and cannot be
+                treated as ordinary jumps.''' % (e, poles, iv)))
+
+
+def _split_off_piecewise(expr):
+    """Split ``expr`` into a top-level Piecewise term and the rest."""
+    if isinstance(expr, Piecewise):
+        return expr, S.Zero
+    if isinstance(expr, Add):
+        pws = [a for a in expr.args if isinstance(a, Piecewise)]
+        if len(pws) > 1:
+            raise ValueError(filldedent('''
+                Expressions with more than one Piecewise term are not
+                supported; combine them with piecewise_fold first.'''))
+        rest = Add(*[a for a in expr.args if not isinstance(a, Piecewise)])
+        if rest.has(Piecewise):
+            raise ValueError(filldedent('''
+                Only a top-level Piecewise term is supported; got a
+                Piecewise nested inside %s.''' % rest))
+        if pws:
+            return pws[0], rest
+        return None, expr
+    if expr.has(Piecewise):
+        raise ValueError(filldedent('''
+            Only a top-level Piecewise term is supported; got a
+            Piecewise nested inside %s.''' % expr))
+    return None, expr
+
+
+def _distributional_diff_step(expr, x):
+    from sympy.functions.special.delta_functions import DiracDelta
+    pw, rest = _split_off_piecewise(expr)
+    result = diff(rest, x)
+    if pw is None:
+        return result
+    pieces = _real_line_pieces(pw, x)
+    for e, iv in pieces:
+        _check_rational_piece(e, x, iv)
+    result += pw.func(*[(diff(e, x), c) for e, c in pw.args])
+    for (e1, iv1), (e2, iv2) in zip(pieces, pieces[1:]):
+        b = iv1.right
+        if not b.is_finite:
+            continue
+        jump = e2.subs(x, b) - e1.subs(x, b)
+        if jump.is_zero:
+            continue
+        result += jump*DiracDelta(x - b)
+    return result
+
+
+def distributional_diff(expr, x, n=1):
+    r"""
+    Differentiate an expression in the sense of distributions.
+
+    Explanation
+    ===========
+
+    The ordinary derivative of a :class:`Piecewise` function differentiates
+    each piece separately and does not account for the jumps between the
+    pieces. Viewed as a distribution, however, a function with a jump of
+    height `h` at a point `b` acquires a term `h\\,\\delta(x - b)` in its
+    derivative, where `\\delta` is :class:`~.DiracDelta`. Higher derivatives
+    correspondingly produce derivatives of `\\delta`.
+
+    ``distributional_diff`` returns the sum of the ordinary (piecewise)
+    derivative and the singular terms located at the breakpoints. The
+    coefficient of each singular term is the jump `f(b^+) - f(b^-)`
+    determined by the one-sided limits at the breakpoint; the value
+    assigned to any single breakpoint by the Piecewise conditions does
+    not affect the result. Repeated differentiation is supported, either
+    through the optional third argument or by applying the function to
+    its own output.
+
+    Currently the Piecewise must be defined on the whole real line (up to
+    isolated points) with finitely many pieces, the breakpoints must be
+    comparable real numbers, and each piece must be a polynomial or a
+    rational function of the variable. Pieces with poles inside their
+    domain (or at a breakpoint) are rejected, since the resulting
+    singularities are not of DiracDelta type.
+
+    Parameters
+    ==========
+
+    expr : an expression, typically a :class:`Piecewise` or a sum of a
+        :class:`Piecewise` and :class:`~.DiracDelta` terms as returned
+        by a previous call to ``distributional_diff``.
+    x : the variable of differentiation (a :class:`~.Symbol`).
+    n : the order of differentiation (nonnegative integer, default 1).
+
+    Examples
+    ========
+
+    >>> from sympy import Eq, Piecewise, DiracDelta, distributional_diff
+    >>> from sympy.abc import x
+
+    A step of height 2 at the origin contributes ``2*DiracDelta(x)``:
+
+    >>> f = Piecewise((0, x < 0), (2, True))
+    >>> distributional_diff(f, x)
+    2*DiracDelta(x)
+
+    The ramp function is continuous, so its first derivative has no
+    singular term; the jump of its slope shows up only after
+    differentiating once more:
+
+    >>> g = Piecewise((0, x < 0), (x, True))
+    >>> distributional_diff(g, x)
+    Piecewise((0, x < 0), (1, True))
+    >>> distributional_diff(g, x, 2)
+    DiracDelta(x)
+
+    The value assigned to a single breakpoint is irrelevant; only the
+    one-sided limits matter:
+
+    >>> h = Piecewise((0, x < 0), (5, Eq(x, 0)), (1, True))
+    >>> distributional_diff(h, x)
+    DiracDelta(x)
+
+    See Also
+    ========
+
+    Piecewise
+    sympy.functions.special.delta_functions.DiracDelta
+    """
+    if not isinstance(x, Symbol):
+        raise ValueError(filldedent('''
+            The variable of differentiation must be a Symbol; got
+            %s.''' % x))
+    n = sympify(n)
+    if not (n.is_Integer and n.is_nonnegative):
+        raise ValueError(filldedent('''
+            The order of differentiation must be a nonnegative
+            integer; got %s.''' % n))
+    for _ in range(int(n)):
+        expr = _distributional_diff_step(expr, x)
+    return expr
