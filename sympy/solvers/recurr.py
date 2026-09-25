@@ -62,7 +62,8 @@ from sympy.core.sympify import sympify
 from sympy.simplify import simplify, hypersimp, hypersimilar  # type: ignore
 from sympy.solvers import solve, solve_undetermined_coeffs
 from sympy.polys import Poly, quo, gcd, lcm, roots, resultant
-from sympy.functions import binomial, factorial, FallingFactorial, RisingFactorial
+from sympy.functions import (binomial, factorial, FallingFactorial,
+    RisingFactorial, KroneckerDelta)
 from sympy.matrices import Matrix, casoratian
 from sympy.utilities.iterables import numbered_symbols
 
@@ -844,3 +845,220 @@ def rsolve(f, y, init=None):
             solution = solution.subs(result)
 
     return solution
+
+
+def rsolve_periodic(coeffs, f, y, period, init=None):
+    r"""
+    Solve a linear recurrence whose coefficients are periodic in `n`.
+
+    Given a positive integer period `p` and a `k`-th order linear
+    recurrence whose coefficients repeat with period `p`:
+
+    .. math:: a_{r,k} y(n + k) + a_{r,k-1} y(n + k - 1) + \cdots
+              + a_{r,0} y(n) = f_r, \qquad n \equiv r \pmod{p}
+
+    where the coefficients ``a_{r, i}`` and the inhomogeneous terms
+    ``f_r`` are rational numbers and ``a_{r, k}`` is nonzero for every
+    phase ``r``, finds the exact general term ``y(n)`` expressed by
+    residue classes modulo ``p``.
+
+    Parameters
+    ==========
+
+    coeffs : list of ``p`` lists of rational numbers
+        ``coeffs[r][i]`` is the coefficient of ``y(n + i)`` of the
+        recurrence valid for ``n % p == r``.  Every row must have the
+        same length ``k + 1`` and ``coeffs[r][k]`` must be nonzero.
+    f : list of ``p`` rational numbers
+        ``f[r]`` is the inhomogeneous term of the recurrence valid for
+        ``n % p == r``.
+    y : applied function, e.g. ``y(n)``
+        The unknown sequence and the independent variable.
+    period : positive integer
+        The period ``p`` of the coefficients.
+    init : dict or list, optional
+        Initial values, in any of the forms accepted by :func:`rsolve`.
+
+    Returns
+    =======
+
+    A dictionary mapping each residue ``r`` in ``range(p)`` to an
+    expression in ``n`` giving ``y(n)`` for all ``n`` with
+    ``n % p == r``.  The expressions involve the block index
+    ``(n - r)/p`` and may contain binomial coefficients (from
+    nontrivial Jordan blocks of the period state matrix) and
+    :class:`~.KroneckerDelta` terms (finite transients from zero
+    eigenvalues of the period state matrix).
+
+    If initial values are given but do not determine a unique solution,
+    a ``ValueError`` is raised reporting which initial values are
+    missing.  ``None`` is returned if the initial values are
+    inconsistent with the recurrence.
+
+    Examples
+    ========
+
+    >>> from sympy import Function, rsolve_periodic
+    >>> from sympy.abc import n
+    >>> y = Function('y')
+
+    The recurrence ``y(n + 1) = y(n)`` for even ``n`` and
+    ``y(n + 1) = 2*y(n)`` for odd ``n``:
+
+    >>> rsolve_periodic([[-1, 1], [-2, 1]], [0, 0], y(n), 2)
+    {0: 2**(n/2)*C0, 1: 2**(n/2 - 1/2)*C0}
+
+    >>> rsolve_periodic([[-1, 1], [-2, 1]], [0, 0], y(n), 2, {y(0): 3})
+    {0: 3*2**(n/2), 1: 3*2**(n/2 - 1/2)}
+
+    See Also
+    ========
+
+    rsolve
+
+    """
+    n = y.args[0]
+    func = y.func
+
+    p = sympify(period)
+    if not (p.is_integer and p.is_positive):
+        raise ValueError(
+            "The period should be a positive integer, got '%s'" % period)
+    p = int(p)
+
+    coeffs = [[sympify(c) for c in row] for row in coeffs]
+    if len(coeffs) != p:
+        raise ValueError(
+            "Expected %d rows of coefficients, got %d" % (p, len(coeffs)))
+    k = len(coeffs[0]) - 1
+    if k < 1:
+        raise ValueError("The recurrence should have order at least one")
+    for row in coeffs:
+        if len(row) != k + 1:
+            raise ValueError("All rows of coefficients should have length %d" % (k + 1))
+        for c in row:
+            if not c.is_Rational:
+                raise ValueError(
+                    "Rational coefficients expected, got '%s'" % c)
+        if row[k] == 0:
+            raise ValueError(
+                "The highest order coefficient should be nonzero in every phase")
+
+    f = [sympify(v) for v in f]
+    if len(f) != p:
+        raise ValueError(
+            "Expected %d inhomogeneous terms, got %d" % (p, len(f)))
+    for v in f:
+        if not v.is_Rational:
+            raise ValueError(
+                "Rational inhomogeneous terms expected, got '%s'" % v)
+
+    csyms = numbered_symbols('C')
+    constants = [next(csyms) for _ in range(k)]
+    zero_map = dict(zip(constants, [S.Zero]*k))
+
+    # Iterate the scalar recurrence over one full period with a symbolic
+    # window W(m) = (y(p*m), ..., y(p*m + k - 1)) to obtain the constant
+    # state transition W(m + 1) = A*W(m) + b and, for every phase r, the
+    # row selecting y(p*m + r) from W(m).
+    window = list(constants)
+    emitted = []
+    for s in range(p):
+        emitted.append(window[0])
+        a = coeffs[s]
+        nxt = (f[s] - sum(a[i]*window[i] for i in range(k)))/a[k]
+        window = window[1:] + [nxt.expand()]
+
+    A = Matrix(k, k, lambda i, j: window[i].coeff(constants[j]))
+    b_vec = Matrix(k, 1, lambda i, _: window[i].subs(zero_map))
+    rows = [Matrix(1, k, lambda _, j: e.coeff(constants[j])) for e in emitted]
+    shifts = [e.subs(zero_map) for e in emitted]
+
+    P, J = A.jordan_form()
+    m = Dummy('m')
+
+    # W(m) = A**m*W(0) + sum(A**i*b, (i, 0, m - 1)), evaluated block by
+    # block in Jordan coordinates.  For a Jordan block of size s with
+    # eigenvalue lam and nilpotent part N:
+    #
+    # * lam != 0: block**m has entries binomial(m, j - i)*lam**(m - j + i)
+    # * lam == 0: block**m is the finite transient sum(KroneckerDelta(m, t)*N**t)
+    # * lam == 1: sum(block**i) = sum(binomial(m, t + 1)*N**t)
+    # * lam != 1: sum(block**i) = (block - I)**-1*(block**m - I)
+    J_pow = Matrix.zeros(k)
+    S_pow = Matrix.zeros(k)
+    start = 0
+    for block in J.get_diag_blocks():
+        s = block.rows
+        lam = block[0, 0]
+        eye = Matrix.eye(s)
+        nil = Matrix.zeros(s)
+        for i in range(s - 1):
+            nil[i, i + 1] = 1
+
+        if lam == 0:
+            block_pow = sum((KroneckerDelta(m, t)*nil**t for t in range(s)),
+                            Matrix.zeros(s))
+        else:
+            block_pow = Matrix(s, s, lambda i, j:
+                binomial(m, j - i)*lam**(m - (j - i)) if j >= i else 0)
+
+        if lam == 1:
+            block_sum = sum((binomial(m, t + 1)*nil**t for t in range(s)),
+                            Matrix.zeros(s))
+        else:
+            block_sum = (block - eye).inv()*(block_pow - eye)
+
+        J_pow[start:start + s, start:start + s] = block_pow
+        S_pow[start:start + s, start:start + s] = block_sum
+        start += s
+
+    P_inv = P.inv()
+    W_m = P*(J_pow*(P_inv*Matrix(k, 1, lambda i, _: constants[i])) +
+             S_pow*(P_inv*b_vec))
+
+    result = {}
+    for r in range(p):
+        result[r] = (rows[r]*W_m)[0] + shifts[r]
+        result[r] = result[r].subs(m, (n - r)/p)
+
+    if init in ({}, []):
+        init = None
+
+    if init is None:
+        return result
+
+    if isinstance(init, list):
+        init = {i: init[i] for i in range(len(init))}
+
+    equations = []
+    for key, v in init.items():
+        try:
+            i = int(key)
+        except TypeError:
+            if key.is_Function and key.func == func:
+                i = int(key.args[0])
+            else:
+                raise ValueError("Integer or term expected, got '%s'" % key)
+        if i < 0:
+            raise ValueError("Nonnegative index expected, got '%s'" % key)
+        equations.append(result[i % p].subs(n, i) - v)
+
+    sol = solve(equations, *constants, dict=True)
+    if not sol:
+        return None
+
+    M = Matrix(len(equations), k, lambda i, j:
+        equations[i].expand().coeff(constants[j]))
+    missing = sorted({j for vec in M.nullspace() for j in range(k)
+                      if vec[j] != 0})
+    if missing:
+        raise ValueError(
+            "The initial values do not determine a unique solution; "
+            "missing initial values for: %s" %
+            ", ".join("%s(%d)" % (func, j) for j in missing))
+
+    for r in range(p):
+        result[r] = result[r].subs(sol[0]).simplify()
+
+    return result

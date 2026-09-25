@@ -83,6 +83,8 @@ Recurrence Equations
 
 .. autofunction:: rsolve
 
+.. autofunction:: rsolve_periodic
+
 .. autofunction:: rsolve_poly
 
 .. autofunction:: rsolve_ratio

@@ -5,12 +5,14 @@ from sympy.core.relational import Eq
 from sympy.core.singleton import S
 from sympy.core.symbol import (Symbol, symbols)
 from sympy.functions.combinatorial.factorials import (rf, binomial, factorial)
+from sympy.functions.special.tensor_functions import KroneckerDelta
 from sympy.functions.combinatorial.numbers import (fibonacci, euler, harmonic)
 from sympy.functions.elementary.complexes import Abs
 from sympy.functions.elementary.miscellaneous import sqrt
 from sympy.functions.elementary.trigonometric import (cos, sin)
 from sympy.polys.polytools import factor
-from sympy.solvers.recurr import rsolve, rsolve_hyper, rsolve_poly, rsolve_ratio
+from sympy.solvers.recurr import (rsolve, rsolve_hyper, rsolve_poly,
+    rsolve_ratio, rsolve_periodic)
 from sympy.testing.pytest import raises, slow, XFAIL
 from sympy.abc import a, b
 
@@ -317,3 +319,118 @@ def test_issue_15553():
     assert rsolve(Eq(f(n), 2*f(n - 1) + 3*n**2), f(n)) == 2**n*C0 - 3*n**2 - 12*n - 18
     assert rsolve(Eq(f(n), 2*f(n - 1) + n**2), f(n)) == 2**n*C0 - n**2 - 4*n - 6
     assert rsolve(Eq(f(n), 2*f(n - 1) + n), f(n), {f(0): 1}) == 3*2**n - n - 2
+
+
+def _iterate_periodic(coeffs, f, p, init, count):
+    k = len(coeffs[0]) - 1
+    seq = [S(init[i]) for i in range(k)]
+    while len(seq) < count:
+        i = len(seq) - k
+        r = i % p
+        a = coeffs[r]
+        seq.append((S(f[r]) - sum(a[j]*seq[i + j] for j in range(k)))/a[k])
+    return seq
+
+
+def _check_periodic_phases(sol, coeffs, f, p):
+    m = Symbol('m', integer=True, nonnegative=True)
+    k = len(coeffs[0]) - 1
+    for r in range(p):
+        residual = sum(coeffs[r][i]*sol[(r + i) % p].subs(n, p*m + r + i)
+                       for i in range(k + 1)) - f[r]
+        assert expand(residual, func=True).simplify() == 0
+
+
+def test_rsolve_periodic_order3_period3():
+    # y(n + 3) = 2*y(n) + 1 for n % 3 == 0,
+    # y(n + 3) = y(n + 1)     for n % 3 == 1,
+    # y(n + 3) = y(n + 2)     for n % 3 == 2.
+    coeffs = [[-2, 0, 0, 1], [0, -1, 0, 1], [0, 0, -1, 1]]
+    f = [1, 0, 0]
+    sol = rsolve_periodic(coeffs, f, y(n), 3)
+    assert set(sol) == {0, 1, 2}
+    assert sol[0].expand() == 2**(n/3)*C0 + 2**(n/3) - 1
+    assert sol[2] == C2
+    # finite transient from the zero eigenvalue of the state matrix
+    assert (sol[1] - (C2 + (C1 - C2)*KroneckerDelta(0, (n - 1)/3))).expand() == 0
+
+    _check_periodic_phases(sol, coeffs, f, 3)
+
+    sol = rsolve_periodic(coeffs, f, y(n), 3, {0: 1, 1: 2, 2: 3})
+    assert sol[0] == 2**(n/3 + 1) - 1
+    assert sol[1] == 3 - KroneckerDelta(0, (n - 1)/3)
+    assert sol[2] == 3
+
+    seq = _iterate_periodic(coeffs, f, 3, {0: 1, 1: 2, 2: 3}, 40)
+    assert [sol[i % 3].subs(n, i) for i in range(40)] == seq
+
+
+def test_rsolve_periodic_jordan_block():
+    # The period state matrix is a nontrivial Jordan block with
+    # eigenvalue 1, so the general term involves binomial coefficients.
+    # y(n + 2) = y(n + 1) + y(n) for even n, y(n + 2) = y(n) + 1 for odd n.
+    coeffs = [[-1, -1, 1], [-1, 0, 1]]
+    f = [0, 1]
+    sol = rsolve_periodic(coeffs, f, y(n), 2)
+    assert sol[0] == C0 + C1*n/2 + binomial(n/2, 2)
+    assert sol[1] == C1 + (n - 1)/2
+
+    _check_periodic_phases(sol, coeffs, f, 2)
+
+    sol = rsolve_periodic(coeffs, f, y(n), 2, {y(0): 1, y(1): 0})
+    seq = _iterate_periodic(coeffs, f, 2, {0: 1, 1: 0}, 40)
+    assert [sol[i % 2].subs(n, i) for i in range(40)] == seq
+
+
+def test_rsolve_periodic_zero_eigenvalue():
+    # The period state matrix is nilpotent, so the general term keeps a
+    # finite transient expressed with KroneckerDelta terms.
+    # y(n + 2) = y(n + 1) for even n, y(n + 2) = 0 for odd n.
+    coeffs = [[0, -1, 1], [0, 0, 1]]
+    f = [0, 0]
+    sol = rsolve_periodic(coeffs, f, y(n), 2)
+    assert sol[0].has(KroneckerDelta)
+    assert sol[1].has(KroneckerDelta)
+
+    sol = rsolve_periodic(coeffs, f, y(n), 2, {0: 5, 1: 7})
+    seq = _iterate_periodic(coeffs, f, 2, {0: 5, 1: 7}, 30)
+    assert [sol[i % 2].subs(n, i) for i in range(30)] == seq
+    assert seq[:6] == [5, 7, 7, 0, 0, 0]
+
+    # the transient vanishes and the sequence stays at zero
+    for r in range(2):
+        for i in range(2, 12):
+            residual = sum(coeffs[r][j]*sol[(r + j) % 2].subs(n, 2*i + r + j)
+                           for j in range(3))
+            assert residual == 0
+
+
+def test_rsolve_periodic_init():
+    coeffs = [[-1, 1], [-2, 1]]
+    f = [0, 0]
+    sol = rsolve_periodic(coeffs, f, y(n), 2, [3])
+    assert sol == {0: 3*2**(n/2), 1: 3*2**(n/2 - S(1)/2)}
+
+    # not enough initial values: report which ones are missing
+    raises(ValueError, lambda: rsolve_periodic(
+        [[-1, -1, 1], [-1, 0, 1]], [0, 0], y(n), 2, {0: 3}))
+    try:
+        rsolve_periodic([[-2, 0, 0, 1], [0, -1, 0, 1], [0, 0, -1, 1]],
+                        [1, 0, 0], y(n), 3, {0: 1})
+    except ValueError as exc:
+        assert 'y(1)' in str(exc) and 'y(2)' in str(exc)
+    else:
+        assert False
+
+    # inconsistent initial values
+    assert rsolve_periodic([[0, -1, 1], [0, 0, 1]], [0, 0], y(n), 2,
+                           {0: 5, 1: 7, 2: 1}) is None
+
+
+def test_rsolve_periodic_errors():
+    raises(ValueError, lambda: rsolve_periodic([[-1, 1]], [0], y(n), 0))
+    raises(ValueError, lambda: rsolve_periodic([[-1, 1]], [0], y(n), 2))
+    raises(ValueError, lambda: rsolve_periodic([[-1, 1]], [0, 0], y(n), 1))
+    raises(ValueError, lambda: rsolve_periodic([[1, 0]], [0], y(n), 1))
+    raises(ValueError, lambda: rsolve_periodic([[-1, 1]], [n], y(n), 1))
+    raises(ValueError, lambda: rsolve_periodic([[sqrt(2), 1]], [0], y(n), 1))
