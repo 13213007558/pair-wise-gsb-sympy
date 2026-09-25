@@ -3,7 +3,9 @@ Recurrences
 """
 from __future__ import annotations
 
-from sympy.core import S, sympify
+from sympy.core import S, Dummy, sympify
+from sympy.ntheory import isprime
+from sympy.polys.polytools import Poly
 from sympy.utilities.iterables import iterable
 from sympy.utilities.misc import as_int
 
@@ -165,3 +167,322 @@ def linrec_coeffs(c, n):
             return _square_and_reduce(_final_coeffs(n // 2), n % 2)
 
     return _final_coeffs(n)
+
+
+def _berlekamp_massey(s, p):
+    """
+    Berlekamp-Massey algorithm over the finite field GF(p).
+
+    Given a list s of residues modulo the prime p, return the connection
+    polynomial C(x) = 1 + C_1 x + ... + C_L x^L (as a list
+    [1, C_1, ..., C_L] of residues) of a shortest linear recurrence
+    s_n + C_1 s_{n-1} + ... + C_L s_{n-L} = 0 (mod p) generating s,
+    together with its order L.
+    """
+    C = [1]
+    B = [1]
+    L = 0
+    m = 1
+    b = 1
+    for n in range(len(s)):
+        d = s[n]
+        for i in range(1, L + 1):
+            d = (d + C[i]*s[n - i]) % p
+        if d == 0:
+            m += 1
+            continue
+        coef = d*pow(b, -1, p) % p
+        T = C[:]
+        C = C + [0]*(len(B) + m - len(C))
+        for i in range(len(B)):
+            C[i + m] = (C[i + m] - coef*B[i]) % p
+        if 2*L <= n:
+            L = n + 1 - L
+            B = T
+            b = d
+            m = 1
+        else:
+            m += 1
+    return C, L
+
+
+class LinearRecurrence:
+    """
+    A shortest linear recurrence inferred from a finite prefix of a
+    sequence over the finite field GF(p).
+
+    Instances of this class are returned by
+    :func:~.infer_linear_recurrence and should not be constructed
+    directly.
+
+    Attributes
+    ==========
+
+    modulus : int
+        The prime p defining the field GF(p).
+    prefix : tuple
+        The training prefix (reduced modulo p) the recurrence was
+        inferred from.
+    order : int or None
+        The minimal order L of the recurrence. None when the prefix is
+        empty.
+    coefficients : tuple
+        The coefficients (c_1, ..., c_L) such that
+        s_n = c_1 s_{n-1} + ... + c_L s_{n-L} (mod p) for n >= start.
+    status : str
+        One of the following:
+
+        - 'empty': the prefix was empty, no recurrence exists.
+        - 'zero': the prefix was all zeros; the zero recurrence
+          (order 0) generates it and predicts zeros forever.
+        - 'unique': the prefix is long enough (len >= 2*order) to
+          determine a unique shortest recurrence.
+        - 'underdetermined': the prefix is too short (len < 2*order)
+          to determine the future uniquely; other shortest recurrences
+          consistent with the prefix exist.
+    holdout : tuple or None
+        The held-out data passed to :func:~.infer_linear_recurrence,
+        or None if none was given.
+    holdout_mismatch : int or None
+        The absolute index of the first position at which the holdout
+        data disagrees with the recurrence, or None if the holdout is
+        fully consistent (or no holdout was given). The coefficients
+        are never refitted to the holdout data.
+
+    Notes
+    =====
+
+    The recurrence is the shortest one consistent with the given finite
+    prefix only. Even when the status is 'unique', this means unique
+    among the recurrences generating the observed prefix; no finite
+    prefix can prove that an infinite sequence follows a recurrence.
+    """
+
+    EMPTY = 'empty'
+    ZERO = 'zero'
+    UNIQUE = 'unique'
+    UNDERDETERMINED = 'underdetermined'
+
+    def __init__(self, modulus, prefix, order, coefficients, status,
+                 holdout=None, holdout_mismatch=None):
+        self.modulus = modulus
+        self.prefix = prefix
+        self.order = order
+        self.coefficients = coefficients
+        self.status = status
+        self.holdout = holdout
+        self.holdout_mismatch = holdout_mismatch
+
+    @property
+    def start(self):
+        """
+        The first index from which the recurrence applies.
+
+        The inferred recurrence determines s_n for all n >= start
+        (within and beyond the training prefix), where start equals
+        the order of the recurrence. It is None for an empty prefix.
+        """
+        if self.status == self.EMPTY:
+            return None
+        return self.order
+
+    def extend(self, count):
+        """
+        Extend the sequence by count further terms using the recurrence.
+
+        Returns the list of the count new terms following the training
+        prefix, each reduced modulo p. For an 'underdetermined' result
+        this is one of several possible continuations.
+
+        Examples
+        ========
+
+        >>> from sympy.discrete.recurrences import infer_linear_recurrence
+        >>> r = infer_linear_recurrence([1, 1, 2, 3, 5, 1, 6, 0], 7)
+        >>> r.extend(3)
+        [6, 6, 5]
+        """
+        count = as_int(count)
+        if count < 0:
+            raise ValueError("Count of terms must be non-negative")
+        if self.status == self.EMPTY:
+            raise ValueError("Cannot extend from an empty prefix")
+        p = self.modulus
+        terms = list(self.prefix)
+        new = []
+        for _ in range(count):
+            nxt = 0
+            for i, c in enumerate(self.coefficients):
+                nxt += c*terms[-1 - i]
+            nxt %= p
+            terms.append(nxt)
+            new.append(nxt)
+        return new
+
+    def validate(self, holdout):
+        """
+        Check held-out data against the recurrence.
+
+        Returns the absolute index (counted from the start of the
+        training prefix) of the first position where holdout disagrees
+        with the recurrence, or None if all given terms match. The
+        recurrence itself is never modified by this check.
+        """
+        h = [as_int(a) % self.modulus for a in holdout]
+        expected = self.extend(len(h))
+        for i, (e, a) in enumerate(zip(expected, h)):
+            if e != a:
+                return len(self.prefix) + i
+        return None
+
+    def connection_polynomial(self, symbol=None):
+        """
+        The connection polynomial C(x) = 1 - c_1 x - ... - c_L x^L
+        as a Poly over GF(p).
+
+        The sequence satisfies sum of C_i s_{n-i} = 0 (mod p) for
+        n >= start, where C_i are the coefficients of C(x).
+        """
+        if self.status == self.EMPTY:
+            raise ValueError("An empty prefix defines no recurrence")
+        if symbol is None:
+            symbol = Dummy('x')
+        p = self.modulus
+        poly = 1 + sum((-c % p)*symbol**(i + 1)
+                       for i, c in enumerate(self.coefficients))
+        return Poly(poly, symbol, modulus=p)
+
+    def characteristic_polynomial(self, symbol=None):
+        """
+        The characteristic polynomial
+        x^L - c_1 x^(L-1) - ... - c_L as a Poly over GF(p).
+
+        This is the polynomial p(x) of linrec with
+        x^L = c_1 x^(L-1) + ... + c_L.
+        """
+        if self.status == self.EMPTY:
+            raise ValueError("An empty prefix defines no recurrence")
+        if symbol is None:
+            symbol = Dummy('x')
+        L = self.order
+        poly = symbol**L - sum(c*symbol**(L - 1 - i)
+                               for i, c in enumerate(self.coefficients))
+        return Poly(poly, symbol, modulus=self.modulus)
+
+    def __repr__(self):
+        return ("LinearRecurrence(order=%s, coefficients=%s, modulus=%s, "
+                "status=%r)" % (self.order, self.coefficients,
+                                self.modulus, self.status))
+
+
+def infer_linear_recurrence(prefix, p, holdout=None):
+    r"""
+    Infer a shortest linear recurrence from a finite prefix over GF(p).
+
+    Given a prefix of a sequence modulo the prime p, find a recurrence
+    of minimal order L
+
+    .. math :: s_n = c_1 s_{n-1} + c_2 s_{n-2} + \cdots + c_L s_{n-L}
+        pmod{p}
+
+    generating the prefix, using the Berlekamp-Massey algorithm. Only
+    the training prefix is used for the inference; the optional holdout
+    data is checked against the inferred recurrence afterwards and never
+    influences the coefficients.
+
+    Parameters
+    ==========
+
+    prefix : iterable
+        The training terms of the sequence; each term is reduced
+        modulo p.
+    p : int
+        The prime modulus of the finite field GF(p).
+    holdout : iterable, optional
+        Additional terms immediately following the prefix, used only
+        to validate the inferred recurrence.
+
+    Returns
+    =======
+
+    LinearRecurrence
+        The inference result; see the documentation of
+        :class:~.LinearRecurrence for its attributes. In particular
+        status is 'empty' for an empty prefix, 'zero' for an all-zero
+        prefix, 'unique' when the prefix determines a unique shortest
+        recurrence (len(prefix) >= 2*order) and 'underdetermined' when
+        the prefix is too short to determine the future uniquely.
+        holdout_mismatch gives the absolute index of the first term of
+        the holdout data inconsistent with the recurrence (None if the
+        holdout is fully consistent).
+
+    Notes
+    =====
+
+    The result is the shortest recurrence consistent with the given
+    finite prefix. Even a 'unique' result is unique only among the
+    recurrences generating the observed prefix; a finite prefix can
+    never prove that an infinite sequence follows a recurrence.
+
+    Examples
+    ========
+
+    >>> from sympy.discrete.recurrences import infer_linear_recurrence
+
+    The Fibonacci sequence modulo 7 has order 2:
+
+    >>> r = infer_linear_recurrence([1, 1, 2, 3, 5, 1, 6, 0], 7)
+    >>> r.status
+    'unique'
+    >>> r.order, r.coefficients, r.start
+    (2, (1, 1), 2)
+    >>> r.extend(3)
+    [6, 6, 5]
+
+    Holdout data is validated without changing the recurrence:
+
+    >>> r = infer_linear_recurrence([1, 1, 2, 3, 5, 1, 6, 0], 7, holdout=[6, 0])
+    >>> r.holdout_mismatch
+    9
+    >>> r.coefficients
+    (1, 1)
+
+    Degenerate and ambiguous prefixes get explicit statuses:
+
+    >>> infer_linear_recurrence([], 7).status
+    'empty'
+    >>> infer_linear_recurrence([0, 0, 0], 7).status
+    'zero'
+    >>> infer_linear_recurrence([1, 2, 3], 7).status
+    'underdetermined'
+
+    See Also
+    ========
+
+    linrec
+    """
+    p = as_int(p)
+    if not isprime(p):
+        raise ValueError("Modulus must be a prime number")
+    values = tuple(as_int(a) % p for a in prefix)
+    n = len(values)
+    if holdout is not None:
+        holdout = tuple(as_int(a) % p for a in holdout)
+    if n == 0:
+        result = LinearRecurrence(p, values, None, (),
+                                  LinearRecurrence.EMPTY, holdout)
+    elif not any(values):
+        result = LinearRecurrence(p, values, 0, (),
+                                  LinearRecurrence.ZERO, holdout)
+    else:
+        conn, L = _berlekamp_massey(list(values), p)
+        conn = (conn + [0]*(L + 1 - len(conn)))[:L + 1]
+        coeffs = tuple((-c) % p for c in conn[1:])
+        if 2*L <= n:
+            status = LinearRecurrence.UNIQUE
+        else:
+            status = LinearRecurrence.UNDERDETERMINED
+        result = LinearRecurrence(p, values, L, coeffs, status, holdout)
+    if holdout is not None and result.status != LinearRecurrence.EMPTY:
+        result.holdout_mismatch = result.validate(holdout)
+    return result
