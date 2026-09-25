@@ -1,5 +1,6 @@
 from __future__ import annotations
 from sympy.core.function import (Function, Lambda, expand)
+from sympy.core.mod import Mod
 from sympy.core.numbers import (I, Rational)
 from sympy.core.relational import Eq
 from sympy.core.singleton import S
@@ -10,7 +11,11 @@ from sympy.functions.elementary.complexes import Abs
 from sympy.functions.elementary.miscellaneous import sqrt
 from sympy.functions.elementary.trigonometric import (cos, sin)
 from sympy.polys.polytools import factor
-from sympy.solvers.recurr import rsolve, rsolve_hyper, rsolve_poly, rsolve_ratio
+from sympy.functions.elementary.piecewise import Piecewise
+from sympy.functions.special.tensor_functions import KroneckerDelta
+from sympy.simplify.simplify import simplify
+from sympy.solvers.recurr import (rsolve, rsolve_hyper, rsolve_poly,
+    rsolve_ratio, rsolve_periodic)
 from sympy.testing.pytest import raises, slow, XFAIL
 from sympy.abc import a, b
 
@@ -317,3 +322,106 @@ def test_issue_15553():
     assert rsolve(Eq(f(n), 2*f(n - 1) + 3*n**2), f(n)) == 2**n*C0 - 3*n**2 - 12*n - 18
     assert rsolve(Eq(f(n), 2*f(n - 1) + n**2), f(n)) == 2**n*C0 - n**2 - 4*n - 6
     assert rsolve(Eq(f(n), 2*f(n - 1) + n), f(n), {f(0): 1}) == 3*2**n - n - 2
+
+
+def _periodic_terms(coeffs, f, y0, terms):
+    p = len(coeffs)
+    k = len(coeffs[0]) - 1
+    if not isinstance(f, list):
+        f = [f]*p
+    y = list(y0)
+    for j in range(k, terms):
+        a = coeffs[(j - k) % p]
+        y.append((f[(j - k) % p] - sum(a[i]*y[j - k + i]
+                 for i in range(k)))/a[k])
+    return y
+
+
+def test_rsolve_periodic():
+    # y(n + 1) = y(n) + 1 for even n, y(n + 1) = 2*y(n) for odd n
+    sol = rsolve_periodic([[-1, 1], [-2, 1]], [1, 0], n)
+    m = symbols('m', integer=True, nonnegative=True)
+    assert simplify(sol.subs(n, 2*m) - (2**m*(C0 + 2) - 2)) == 0
+    assert simplify(sol.subs(n, 2*m + 1) - (2**m*(C0 + 2) - 1)) == 0
+
+    sol = rsolve_periodic([[-1, 1], [-2, 1]], [1, 0], n, {0: 1})
+    assert [sol.subs(n, j) for j in range(8)] == [1, 2, 4, 5, 10, 11, 22, 23]
+
+    # period 1 reduces to a constant coefficient recurrence
+    assert rsolve_periodic([[-2, 1]], 0, n, [1]) == \
+        Piecewise((2**n, Eq(Mod(n, 1), 0)))
+
+
+def test_rsolve_periodic_order3_period3():
+    coeffs = [[-1, 0, -1, 1], [0, -2, 0, 1], [-1, 0, 1, 2]]
+    f = [1, 0, 3]
+    sol = rsolve_periodic(coeffs, f, n)
+
+    # substitute the general term back into the recurrence in each phase
+    mm = symbols('mm', integer=True, nonnegative=True)
+    for r in range(3):
+        res = sum(coeffs[r][i]*sol.subs(n, 3*mm + r + i) for i in range(4))
+        assert simplify(res - f[r]) == 0
+
+    # compare with direct iteration of the recurrence
+    y = _periodic_terms(coeffs, f, [C0, C1, C2], 40)
+    for j in range(40):
+        assert simplify(sol.subs(n, j) - y[j]) == 0
+
+    sol = rsolve_periodic(coeffs, f, n, {0: 1, 1: 2, 2: 3})
+    assert not (sol.free_symbols & {C0, C1, C2})
+    y = _periodic_terms(coeffs, f, [1, 2, 3], 40)
+    for j in range(40):
+        assert simplify(sol.subs(n, j) - y[j]) == 0
+
+
+def test_rsolve_periodic_jordan():
+    # The period state matrix has a nontrivial Jordan block for the
+    # eigenvalue 1, producing a term linear in the block index.
+    # y(n + 1) = y(n) + 1 for even n, y(n + 1) = y(n) + 2 for odd n
+    sol = rsolve_periodic([[-1, 1], [-1, 1]], [1, 2], n)
+    m = symbols('m', integer=True, nonnegative=True)
+    assert simplify(sol.subs(n, 2*m) - (C0 + 3*m)) == 0
+    assert simplify(sol.subs(n, 2*m + 1) - (C0 + 3*m + 1)) == 0
+
+    y = _periodic_terms([[-1, 1], [-1, 1]], [1, 2], [C0], 40)
+    for j in range(40):
+        assert simplify(sol.subs(n, j) - y[j]) == 0
+
+
+def test_rsolve_periodic_zero_eigenvalue_transient():
+    # y(n + 2) = y(n + 1) for even n, y(n + 2) = y(n) for odd n; the
+    # zero eigenvalue of the period state matrix gives a transient that
+    # only affects y(0).
+    sol = rsolve_periodic([[0, -1, 1], [-1, 0, 1]], 0, n)
+    assert sol.has(KroneckerDelta)
+
+    y = _periodic_terms([[0, -1, 1], [-1, 0, 1]], 0, [C0, C1], 30)
+    for j in range(30):
+        assert simplify(sol.subs(n, j) - y[j]) == 0
+
+
+def test_rsolve_periodic_init():
+    # insufficient initial conditions report the missing values
+    try:
+        rsolve_periodic([[0, -1, 1], [-1, 0, 1]], 0, n, {0: 1})
+        assert False
+    except ValueError as err:
+        assert "y(1)" in str(err)
+    # inconsistent initial conditions
+    assert rsolve_periodic([[-2, 1]], 0, n, {0: 1, 1: 5}) is None
+    # list form of initial conditions
+    assert rsolve_periodic([[-2, 1]], 0, n, [1]) == \
+        Piecewise((2**n, Eq(Mod(n, 1), 0)))
+
+
+def test_rsolve_periodic_raises():
+    # zero leading coefficient in a phase
+    raises(ValueError, lambda: rsolve_periodic([[-1, 0], [-1, 1]], 0, n))
+    # non-rational coefficient
+    raises(ValueError, lambda: rsolve_periodic([[sqrt(2), 1]], 0, n))
+    # wrong number of inhomogeneous terms
+    raises(ValueError, lambda: rsolve_periodic([[-1, 1]], [1, 2], n))
+    # phases with different orders
+    raises(ValueError,
+        lambda: rsolve_periodic([[-1, 1], [-1, 1, 1]], 0, n))

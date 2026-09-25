@@ -17,7 +17,8 @@ from .solvers import solve, solve_linear_system, solve_linear_system_LU, \
 
 from sympy.solvers.diophantine.diophantine import diophantine
 
-from .recurr import rsolve, rsolve_poly, rsolve_ratio, rsolve_hyper
+from .recurr import rsolve, rsolve_poly, rsolve_ratio, rsolve_hyper, \
+    rsolve_periodic
 
 from .ode import checkodesol, classify_ode, dsolve, \
     homogeneous_order
@@ -49,7 +50,7 @@ __all__ = [
 
     'diophantine',
 
-    'rsolve', 'rsolve_poly', 'rsolve_ratio', 'rsolve_hyper',
+    'rsolve', 'rsolve_poly', 'rsolve_ratio', 'rsolve_hyper', 'rsolve_periodic',
 
     'checkodesol', 'classify_ode', 'dsolve', 'homogeneous_order',
 

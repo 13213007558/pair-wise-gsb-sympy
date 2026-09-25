@@ -89,6 +89,8 @@ Recurrence Equations
 
 .. autofunction:: rsolve_hyper
 
+.. autofunction:: rsolve_periodic
+
 Systems of Polynomial Equations
 -------------------------------
 

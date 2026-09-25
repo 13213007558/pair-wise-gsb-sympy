@@ -53,7 +53,8 @@ from sympy.concrete import product
 from sympy.core.singleton import S
 from sympy.core.numbers import Rational, I
 from sympy.core.symbol import Symbol, Wild, Dummy
-from sympy.core.relational import Equality
+from sympy.core.relational import Equality, Eq
+from sympy.core.mod import Mod
 from sympy.core.add import Add
 from sympy.core.mul import Mul
 from sympy.core.sorting import default_sort_key
@@ -62,7 +63,8 @@ from sympy.core.sympify import sympify
 from sympy.simplify import simplify, hypersimp, hypersimilar  # type: ignore
 from sympy.solvers import solve, solve_undetermined_coeffs
 from sympy.polys import Poly, quo, gcd, lcm, roots, resultant
-from sympy.functions import binomial, factorial, FallingFactorial, RisingFactorial
+from sympy.functions import (binomial, factorial, FallingFactorial,
+    RisingFactorial, Piecewise, KroneckerDelta)
 from sympy.matrices import Matrix, casoratian
 from sympy.utilities.iterables import numbered_symbols
 
@@ -844,3 +846,201 @@ def rsolve(f, y, init=None):
             solution = solution.subs(result)
 
     return solution
+
+
+def rsolve_periodic(coeffs, f, n, init=None):
+    r"""
+    Solve a linear recurrence whose coefficients are periodic in `n`.
+
+    Given a period ``p`` and an order ``k``, this solves recurrences of
+    the form
+
+    .. math:: a_{k}^{(r)} y(n+k) + a_{k-1}^{(r)} y(n+k-1) + \cdots +
+              a_{0}^{(r)} y(n) = f^{(r)}, \qquad n \equiv r \pmod{p}
+
+    for `n \ge 0`, where the coefficients `a_{i}^{(r)}` and the
+    inhomogeneous terms `f^{(r)}` are rational numbers and
+    `a_{k}^{(r)} \ne 0` for every phase `r = 0, \ldots, p - 1`.
+
+    ``coeffs`` is a list of ``p`` lists, one per phase, in the same
+    format as for ``rsolve_hyper``: ``coeffs[r] = [a_0, ..., a_k]``
+    selects the coefficients used when `n \equiv r \pmod{p}`, with
+    ``coeffs[r][i]`` multiplying `y(n + i)`. ``f`` is either a list of
+    ``p`` rational numbers (one per phase) or a single rational number
+    used for all phases.
+
+    The solution is returned as a ``Piecewise`` expression in ``n``
+    with one branch per residue class of `n \bmod p`. Terms involving
+    ``KroneckerDelta`` in the block index describe finite transients
+    caused by zero eigenvalues of the period state matrix. If ``init``
+    is not given, the general solution contains the constants
+    ``C0, C1, ...`` corresponding to `y(0), \ldots, y(k-1)`.
+
+    Initial conditions can be given as a dictionary ``{n_0: v_0, ...}``
+    or as a list ``[v_0, v_1, ...]`` with ``L[i]`` mapping to `y(i)`.
+    If they do not determine a unique solution, a ``ValueError`` is
+    raised reporting which initial values are missing; if they are
+    inconsistent, ``None`` is returned.
+
+    Examples
+    ========
+
+    >>> from sympy import rsolve_periodic
+    >>> from sympy.abc import n
+
+    A recurrence alternating between two rules, `y(n+1) = y(n) + 1`
+    for even `n` and `y(n+1) = 2 y(n)` for odd `n`:
+
+    >>> rsolve_periodic([[-1, 1], [-2, 1]], [1, 0], n)
+    Piecewise((2*2**(n/2)*(C0/2 + 1) - 2, Eq(Mod(n, 2), 0)), (2*2**(n/2 - 1/2)*(C0/2 + 1) - 1, Eq(Mod(n, 2), 1)))
+
+    With an initial condition:
+
+    >>> rsolve_periodic([[-1, 1], [-2, 1]], [1, 0], n, {0: 1})
+    Piecewise((3*2**(n/2) - 2, Eq(Mod(n, 2), 0)), (3*2**(n/2 - 1/2) - 1, Eq(Mod(n, 2), 1)))
+
+    See Also
+    ========
+
+    rsolve
+
+    """
+    if not isinstance(n, Symbol):
+        raise ValueError("Expected a symbol for the independent variable, got '%s'" % n)
+
+    coeffs = [list(phase) for phase in coeffs]
+    p = len(coeffs)
+    if p == 0:
+        raise ValueError("At least one phase is required")
+    k = len(coeffs[0]) - 1
+    if k < 1:
+        raise ValueError("Expected coefficients of a recurrence of order at least 1")
+    for phase in coeffs:
+        if len(phase) != k + 1:
+            raise ValueError("All phases must have the same order")
+
+    def as_rational(c):
+        c = sympify(c)
+        if not c.is_Rational:
+            raise ValueError("Rational number expected, got '%s'" % c)
+        return c
+
+    coeffs = [[as_rational(a) for a in phase] for phase in coeffs]
+    for r, phase in enumerate(coeffs):
+        if phase[k] == 0:
+            raise ValueError(
+                "The leading coefficient must be nonzero in every phase, "
+                "got zero in phase %d" % r)
+
+    if isinstance(f, (list, tuple)):
+        f = list(f)
+    else:
+        f = [f]*p
+    if len(f) != p:
+        raise ValueError(
+            "Expected %d inhomogeneous terms, got %d" % (p, len(f)))
+    f = [as_rational(fr) for fr in f]
+
+    # Lift to a first-order system over blocks of L consecutive terms,
+    # where L is the smallest multiple of p with L >= k, so that blocks
+    # are aligned with the phases: x_{m+1} = A x_m + b with
+    # x_m = (y(mL), ..., y(mL + L - 1)).
+    L = p*((k + p - 1)//p)
+    rows = []
+    for t in range(L):
+        a = coeffs[(L + t - k) % p]
+        coeff = [S.Zero]*L
+        const = f[(L + t - k) % p]
+        for i in range(k):
+            pos = L + t - k + i
+            if pos < L:
+                coeff[pos] -= a[i]
+            else:
+                prev, pconst = rows[pos - L]
+                coeff = [c - a[i]*pc for c, pc in zip(coeff, prev)]
+                const -= a[i]*pconst
+        lead = a[k]
+        rows.append(([c/lead for c in coeff], const/lead))
+    A = Matrix([row for row, _ in rows])
+    b = Matrix([const for _, const in rows])
+
+    # Augment to make the system homogeneous: M = [[A, b], [0, 1]].
+    M = Matrix.zeros(L + 1)
+    M[:L, :L] = A
+    M[:L, L] = b
+    M[L, L] = S.One
+
+    P, J = M.jordan_form()
+
+    # Symbolic m-th power of J, block by block. Nilpotent blocks
+    # (zero eigenvalue) contribute finite transients via KroneckerDelta.
+    m = Dummy('m', integer=True, nonnegative=True)
+    powers = []
+    i = 0
+    while i < J.rows:
+        size = 1
+        while i + size < J.rows and J[i + size - 1, i + size] != 0:
+            size += 1
+        lam = J[i, i]
+        B = Matrix.zeros(size)
+        for t in range(size):
+            for j in range(size - t):
+                if lam.is_zero:
+                    B[j, j + t] = KroneckerDelta(m, t)
+                else:
+                    B[j, j + t] = binomial(m, t)*lam**(m - t)
+        powers.append(B)
+        i += size
+    Jm = Matrix.diag(*powers)
+
+    # The first k terms are the free constants; the remaining terms of
+    # the first block follow from the recurrence.
+    cgen = numbered_symbols('C')
+    constants = [next(cgen) for _ in range(k)]
+    y0 = list(constants)
+    for j in range(k, L):
+        a = coeffs[(j - k) % p]
+        val = f[(j - k) % p]
+        for i in range(k):
+            val -= a[i]*y0[j - k + i]
+        y0.append(val/a[k])
+    x0 = Matrix(y0 + [S.One])
+
+    xm = P*(Jm*(P.inv()*x0))
+    result = Piecewise(*[
+        (xm[r].subs(m, (n - r)/p), Eq(Mod(n, p), r)) for r in range(p)])
+
+    if init in ({}, []):
+        init = None
+
+    if init is not None:
+        if isinstance(init, list):
+            init = {i: init[i] for i in range(len(init))}
+
+        equations = []
+        for key, v in init.items():
+            try:
+                i = int(key)
+            except TypeError:
+                raise ValueError("Integer expected, got '%s'" % key)
+            equations.append(result.subs(n, i) - v)
+
+        solution = solve(equations, *constants)
+
+        if not solution:
+            return None
+        if isinstance(solution, list):
+            solution = solution[0]
+
+        free = set(constants)
+        missing = [j for j in range(k)
+                   if y0[j].subs(solution).free_symbols & free]
+        if missing:
+            raise ValueError(
+                "Initial conditions do not determine a unique solution; "
+                "missing initial values for " +
+                ", ".join("y(%d)" % j for j in missing))
+
+        result = result.subs(solution)
+
+    return result
