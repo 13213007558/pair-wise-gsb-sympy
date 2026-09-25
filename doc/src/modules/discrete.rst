@@ -94,3 +94,28 @@ Intersecting Product
 ^^^^^^^^^^^^^^^^^^^^
 
 .. autofunction:: intersecting_product
+
+
+Recurrences
+-----------
+
+.. module:: sympy.discrete.recurrences
+
+This section lists the methods for evaluating linear recurrences and
+for inferring the shortest linear recurrence satisfied by a sequence
+over a finite field.
+
+Linear Recurrence Evaluation
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. autofunction:: linrec
+
+.. autofunction:: linrec_coeffs
+
+Shortest Linear Recurrence Inference
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. autofunction:: find_linear_recurrence
+
+.. autoclass:: LinearRecurrence
+   :members:
