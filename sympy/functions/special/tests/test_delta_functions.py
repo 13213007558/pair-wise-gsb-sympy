@@ -3,12 +3,17 @@ from sympy.core.numbers import (I, nan, oo, pi)
 from sympy.core.relational import (Eq, Ne)
 from sympy.core.singleton import S
 from sympy.core.symbol import (Symbol, symbols)
+from sympy.core.function import diff
 from sympy.functions.elementary.complexes import (adjoint, conjugate, sign, transpose)
 from sympy.functions.elementary.miscellaneous import sqrt
 from sympy.functions.elementary.piecewise import Piecewise
-from sympy.functions.special.delta_functions import (DiracDelta, Heaviside)
+from sympy.functions.elementary.trigonometric import sin
+from sympy.functions.special.delta_functions import (
+    DiracDelta, Heaviside, distributional_diff)
 from sympy.functions.special.singularity_functions import SingularityFunction
-from sympy.simplify.simplify import signsimp
+from sympy.integrals.integrals import integrate
+from sympy.logic.boolalg import And
+from sympy.simplify.simplify import signsimp, simplify
 
 
 from sympy.testing.pytest import raises
@@ -164,3 +169,76 @@ def test_rewrite():
     assert 5*x*y*Heaviside(y + 1).rewrite(SingularityFunction) == 5*x*y*SingularityFunction(y, -1, 0)
     assert ((x - 3)**3*Heaviside(x - 3)).rewrite(SingularityFunction) == (x - 3)**3*SingularityFunction(x, 3, 0)
     assert Heaviside(0).rewrite(SingularityFunction) == S.Half
+
+
+def test_distributional_diff():
+    # a jump discontinuity contributes a DiracDelta term whose
+    # coefficient is the right limit minus the left limit
+    assert distributional_diff(Piecewise((0, x < 0), (1, True)), x) == DiracDelta(x)
+    assert distributional_diff(Piecewise((0, x < 1), (2, True)), x) == 2*DiracDelta(x - 1)
+    # the function value at the break point does not affect the result
+    assert distributional_diff(
+        Piecewise((0, x < 0), (5, Eq(x, 0)), (2, True)), x) == 2*DiracDelta(x)
+    # several break points
+    ramp = Piecewise((0, x < 0), (x, x < 1), (1, True))
+    assert distributional_diff(ramp, x) == Piecewise(
+        (0, x < 0), (1, And(0 < x, x < 1)), (0, True))
+    assert distributional_diff(ramp, x, 2) == DiracDelta(x) - DiracDelta(x - 1)
+    # a continuous function whose derivative jumps: no DiracDelta in the
+    # first derivative, but differentiating again exposes the jump
+    g = Piecewise((-x, x < 0), (x, True))
+    assert distributional_diff(g, x) == Piecewise((-1, x < 0), (1, True))
+    assert distributional_diff(g, x, 2) == 2*DiracDelta(x)
+    assert distributional_diff(g, x, 3) == 2*DiracDelta(x, 1)
+    # repeated application composes with the n argument
+    assert distributional_diff(distributional_diff(g, x), x) == 2*DiracDelta(x)
+    # rational function pieces
+    assert distributional_diff(Piecewise((0, x < 1), (1/x, True)), x) == \
+        Piecewise((0, x < 1), (-1/x**2, True)) + DiracDelta(x - 1)
+    # non-piecewise input is differentiated in the ordinary sense
+    assert distributional_diff(x**3 + 2*x, x) == 3*x**2 + 2
+    assert distributional_diff(x**2, x, 2) == 2
+    # n = 0 returns the input unchanged
+    assert distributional_diff(ramp, x, 0) == ramp
+    # DiracDelta terms with x-dependent coefficients are reduced using
+    # x*DiracDelta(x - a) = a*DiracDelta(x - a)
+    assert distributional_diff(x*DiracDelta(x - 1), x) == DiracDelta(x - 1, 1)
+    assert distributional_diff(x*DiracDelta(x - 1, 1), x) == \
+        DiracDelta(x - 1, 2) - DiracDelta(x - 1, 1)
+
+
+def test_distributional_diff_errors():
+    a = symbols('a')
+    # a pole inside a piece is not a jump discontinuity
+    raises(ValueError, lambda: distributional_diff(
+        Piecewise((0, x < 0), (1/(x - 2), x < 3), (0, True)), x))
+    # a pole at a break point gives non-finite one-sided limits
+    raises(ValueError, lambda: distributional_diff(
+        Piecewise((0, x < 0), (1/x, True)), x))
+    # pieces must be polynomials or rational functions
+    raises(ValueError, lambda: distributional_diff(
+        Piecewise((0, x < 0), (sin(x), True)), x))
+    # the pieces must cover the whole real line
+    raises(ValueError, lambda: distributional_diff(Piecewise((1, x < 0)), x))
+    # break points must be comparable real numbers
+    raises(ValueError, lambda: distributional_diff(
+        Piecewise((0, x < a), (1, True)), x))
+    raises(ValueError, lambda: distributional_diff(
+        Piecewise((0, x < 0), (1, True)), x, -1))
+
+
+def test_distributional_diff_integration_by_parts():
+    # the defining identity of the distributional derivative:
+    # integrate(T'*phi) = -integrate(T*phi') for any compactly
+    # supported smooth test function phi
+    phi = Piecewise(((1 - x**2)**2, And(x > -1, x < 1)), (0, True))
+    f = Piecewise((1, x < 0), (x**2, x < 2), (1/x, True))
+    df = distributional_diff(f, x)
+    assert simplify(integrate(df*phi, (x, -oo, oo))
+        + integrate(f*diff(phi, x), (x, -oo, oo))) == 0
+    # second derivative, checked against a C^2 test function:
+    # integrate(T''*phi) = integrate(T*phi'')
+    phi2 = Piecewise(((1 - x**2)**3, And(x > -1, x < 1)), (0, True))
+    d2f = distributional_diff(f, x, 2)
+    assert simplify(integrate(d2f*phi2, (x, -oo, oo))
+        - integrate(f*diff(phi2, x, 2), (x, -oo, oo))) == 0

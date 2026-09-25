@@ -12,6 +12,8 @@ Dirac Delta and Related Discontinuous Functions
 .. autoclass:: sympy.functions.special.delta_functions.Heaviside
    :members:
 
+.. autofunction:: sympy.functions.special.delta_functions.distributional_diff
+
 .. module:: sympy.functions.special.singularity_functions
 
 .. autoclass:: sympy.functions.special.singularity_functions.SingularityFunction
