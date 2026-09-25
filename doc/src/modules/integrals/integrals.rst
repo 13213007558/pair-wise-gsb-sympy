@@ -53,6 +53,23 @@ even a few nonelementary integrals (in particular, some integrals involving the 
           4
 
 
+Hadamard Finite Part Integration
+--------------------------------
+
+.. module:: sympy.integrals.finitepart
+
+The function :func:`~.hadamard_finite_part_integrate` evaluates Hadamard
+finite part integrals of rational functions over a real interval that may
+contain poles of arbitrary order, by subtracting the divergent terms of the
+truncated integral and keeping the constant part::
+
+    >>> from sympy.integrals.finitepart import hadamard_finite_part_integrate
+    >>> from sympy.abc import x
+    >>> hadamard_finite_part_integrate(1/x**2, x, -1, 1)
+    -2
+
+.. autofunction:: hadamard_finite_part_integrate
+
 Integral Transforms
 -------------------
 

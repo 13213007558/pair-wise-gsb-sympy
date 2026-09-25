@@ -26,6 +26,7 @@ from .transforms import (mellin_transform, inverse_mellin_transform,
                         hankel_transform, inverse_hankel_transform,
                         HankelTransform, InverseHankelTransform)
 from .singularityfunctions import singularityintegrate
+from .finitepart import hadamard_finite_part_integrate
 
 __all__ = [
     'integrate', 'Integral', 'line_integrate',
@@ -43,4 +44,6 @@ __all__ = [
     'InverseHankelTransform',
 
     'singularityintegrate',
+
+    'hadamard_finite_part_integrate',
 ]
