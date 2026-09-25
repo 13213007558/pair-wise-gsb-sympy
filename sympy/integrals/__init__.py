@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 from .integrals import integrate, Integral, line_integrate
+from .finitepart import hadamard_finite_part_integral
 from .transforms import (mellin_transform, inverse_mellin_transform,
                         MellinTransform, InverseMellinTransform,
                         laplace_transform, inverse_laplace_transform,
@@ -29,6 +30,8 @@ from .singularityfunctions import singularityintegrate
 
 __all__ = [
     'integrate', 'Integral', 'line_integrate',
+
+    'hadamard_finite_part_integral',
 
     'mellin_transform', 'inverse_mellin_transform', 'MellinTransform',
     'InverseMellinTransform', 'laplace_transform',

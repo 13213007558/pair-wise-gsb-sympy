@@ -53,6 +53,17 @@ even a few nonelementary integrals (in particular, some integrals involving the 
           4
 
 
+Hadamard Finite Part Integrals
+------------------------------
+
+.. module:: sympy.integrals.finitepart
+
+The Hadamard finite part of integrals of rational functions with poles of
+arbitrary order in the integration interval can be computed with
+:func:`~.hadamard_finite_part_integral`.
+
+.. autofunction:: hadamard_finite_part_integral
+
 Integral Transforms
 -------------------
 

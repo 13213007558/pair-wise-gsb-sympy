@@ -215,6 +215,7 @@ from .utilities import (flatten, group, take, subsets, variations,
         threaded, xthreaded, public, memoize_property, timed)
 
 from .integrals import (integrate, Integral, line_integrate, mellin_transform,
+        hadamard_finite_part_integral,
         inverse_mellin_transform, MellinTransform, InverseMellinTransform,
         laplace_transform, laplace_correspondence, laplace_initial_conds,
         inverse_laplace_transform, LaplaceTransform,
@@ -459,6 +460,7 @@ __all__ = [
 
     # sympy.integrals
     'integrate', 'Integral', 'line_integrate', 'mellin_transform',
+    'hadamard_finite_part_integral',
     'inverse_mellin_transform', 'MellinTransform', 'InverseMellinTransform',
     'laplace_transform', 'inverse_laplace_transform', 'LaplaceTransform',
     'laplace_correspondence', 'laplace_initial_conds',
