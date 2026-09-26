@@ -11,6 +11,7 @@ from .sequences import SeqPer, SeqFormula, sequence, SeqAdd, SeqMul
 from .fourier import fourier_series
 from .formal import fps
 from .limitseq import difference_delta, limit_seq
+from .weighted_series import WeightedSeries, SeriesTruncationError
 
 from sympy.core.singleton import S
 EmptySequence = S.EmptySequence
@@ -20,5 +21,5 @@ O = Order
 __all__ = ['Order', 'O', 'limit', 'Limit', 'gruntz', 'series', 'approximants',
         'pade_approximant', 'residue', 'EmptySequence', 'SeqPer', 'SeqFormula',
         'sequence', 'SeqAdd', 'SeqMul', 'fourier_series', 'fps', 'difference_delta',
-        'limit_seq'
+        'limit_seq', 'WeightedSeries', 'SeriesTruncationError'
         ]
