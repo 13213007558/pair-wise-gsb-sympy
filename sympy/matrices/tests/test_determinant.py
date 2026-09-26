@@ -6,7 +6,7 @@ from sympy.core.numbers import Rational
 from sympy.core.symbol import (Symbol, symbols)
 from sympy.functions.elementary.miscellaneous import sqrt
 from sympy.polys.polytools import Poly
-from sympy.matrices import Matrix, eye, ones
+from sympy.matrices import Matrix, SparseMatrix, eye, ones, zeros
 from sympy.abc import x, y, z
 from sympy.testing.pytest import raises
 from sympy.matrices.exceptions import NonSquareMatrixError
@@ -288,3 +288,43 @@ def test_charpoly():
 
     n = Matrix(3, 3, [x, 0, 0, a, y, 0, b, c, z])
     assert n.charpoly() == Poly(t**3 - (x+y+z)*t**2 + t*(x*y+y*z+x*z) - x*y*z, t)
+
+
+def test_minpoly():
+    m = Matrix(3, 3, [1, 2, 3, 4, 5, 6, 7, 8, 9])
+    assert m.minpoly() == Poly(x**3 - 15*x**2 - 18*x, x, domain='QQ')
+    assert m.minpoly(x) == Poly(x**3 - 15*x**2 - 18*x, x, domain='QQ')
+
+    assert eye(3).minpoly() == Poly(x - 1, x, domain='QQ')
+    assert zeros(4).minpoly() == Poly(x, x, domain='QQ')
+    assert Matrix(0, 0, []).minpoly() == Poly(1, x, domain='QQ')
+
+    raises(NonSquareMatrixError, lambda: Matrix([[1], [2]]).minpoly())
+
+    # The minimal polynomial can have lower degree than the characteristic
+    # polynomial when there are repeated eigenvalues.
+    n = Matrix(4, 4, [45, 0, 0, 0, 0, 23, 0, 0, 0, 0, 87, 0, 0, 0, 0, 12])
+    assert n.minpoly() == Poly((x - 45)*(x - 23)*(x - 87)*(x - 12), x, domain='QQ')
+
+    n = Matrix([[2, 0, 0], [0, 2, 0], [0, 0, 3]])
+    assert n.charpoly() == Poly((x - 2)**2*(x - 3), x)
+    assert n.minpoly() == Poly((x - 2)*(x - 3), x, domain='QQ')
+
+    # The minimal polynomial depends on the Jordan block sizes and not only
+    # on the characteristic polynomial.
+    j = Matrix([[2, 1, 0], [0, 2, 0], [0, 0, 2]])
+    assert j.charpoly() == Poly((x - 2)**3, x)
+    assert j.minpoly() == Poly(x**2 - 4*x + 4, x, domain='QQ')
+    assert j**2 - 4*j + 4*eye(3) == zeros(3)
+    assert j - 2*eye(3) != zeros(3)
+
+    # Sparse matrices are handled without densification and give the same
+    # results as dense matrices.
+    assert SparseMatrix(j).minpoly() == j.minpoly()
+    assert SparseMatrix(4, 4, {}).minpoly() == Poly(x, x, domain='QQ')
+
+    n = Matrix([[Rational(1, 2), 0], [0, Rational(1, 3)]])
+    assert n.minpoly() == Poly(x**2 - Rational(5, 6)*x + Rational(1, 6), x, domain='QQ')
+
+    # Only matrices over QQ or GF(p) are supported for now.
+    raises(ValueError, lambda: Matrix([[x, 1], [1, x]]).minpoly())

@@ -38,8 +38,9 @@ from .domainscalar import DomainScalar
 
 from sympy.polys.domains import ZZ, EXRAW, QQ
 
-from sympy.polys.densearith import dup_mul, dup_exquo_ground
+from sympy.polys.densearith import dup_mul, dup_exquo, dup_exquo_ground
 from sympy.polys.densebasic import dup_convert
+from sympy.polys.euclidtools import dup_gcd
 from sympy.polys.densetools import (
     dup_mul_ground,
     dup_content,
@@ -3769,6 +3770,193 @@ class DomainMatrix:
         sympy.polys.matrices.sdm.sdm_berk
         """
         return self.rep.charpoly()
+
+    def minpoly(self):
+        r"""
+        Minimal polynomial of a square matrix.
+
+        The minimal polynomial of a square matrix `M` is the monic
+        polynomial `p` of smallest degree such that `p(M) = 0`. It divides
+        any polynomial `q` with `q(M) = 0` and in particular it divides
+        the characteristic polynomial. Unlike the characteristic polynomial
+        the minimal polynomial does not count the algebraic multiplicities of
+        repeated factors and so can have much lower degree for matrices with
+        many repeated Jordan blocks.
+
+        Currently the supported ground domains are the rational numbers
+        ``QQ`` and the finite prime fields ``GF(p)``. The polynomial is
+        returned as a list of coefficients (highest degree first) in the
+        ground domain, in the same format as returned by :meth:`charpoly`.
+
+        Returns
+        =======
+
+        list: list of DomainElement
+            coefficients of the minimal polynomial
+
+        Examples
+        ========
+
+        >>> from sympy import QQ, GF
+        >>> from sympy.polys.matrices import DM
+
+        A diagonal matrix with repeated eigenvalues has a minimal polynomial
+        of lower degree than its characteristic polynomial:
+
+        >>> M = DM([[2, 0, 0], [0, 2, 0], [0, 0, 3]], QQ)
+        >>> M.minpoly()
+        [1, -5, 6]
+        >>> M.charpoly()
+        [1, -7, 16, -12]
+
+        The size of the largest Jordan block of each eigenvalue determines
+        the multiplicity in the minimal polynomial:
+
+        >>> M = DM([[2, 1, 0], [0, 2, 0], [0, 0, 2]], QQ)
+        >>> M.minpoly()
+        [1, -4, 4]
+
+        The computation is also exact over finite prime fields:
+
+        >>> M = DM([[1, 1], [0, 1]], GF(2))
+        >>> M.minpoly() == [GF(2)(1), GF(2)(0), GF(2)(1)]
+        True
+
+        Notes
+        =====
+
+        The algorithm is deterministic and works as follows. The minimal
+        polynomial of `M` is the least common multiple of the minimal
+        polynomials of the standard basis vectors `e_i` because `p(M) = 0`
+        if and only if `p(M) e_i = 0` for all `i`. The minimal polynomial
+        of a single vector `v` is found from the first linear dependence in
+        its Krylov sequence `v, Mv, M^2 v, \dots`, which is computed
+        exactly by Gaussian elimination. Basis vectors whose cyclic
+        subspaces are already contained in the (M-invariant) sum of the
+        previously computed Krylov subspaces are skipped since their minimal
+        polynomials necessarily divide the lcm accumulated so far. This
+        guarantees that the returned polynomial annihilates `M` and that no
+        monic polynomial of smaller degree does.
+
+        See Also
+        ========
+
+        charpoly
+        charpoly_factor_list
+        """
+        M = self
+        K = M.domain
+
+        m, n = M.shape
+
+        if m != n:
+            raise DMNonSquareMatrixError("not square")
+
+        if not (K.is_QQ or K.is_FF):
+            raise DMDomainError("minpoly is only supported over QQ and GF(p)")
+
+        one = K.one
+        zero = K.zero
+
+        if n == 0:
+            return [one]
+
+        dok = M.to_dok()
+
+        def matvec(v):
+            # Compute M*v for a vector v as a list of domain elements.
+            w = [zero]*n
+            for (i, j), mij in dok.items():
+                w[i] += mij*v[j]
+            return w
+
+        # Row echelon basis of the sum of the Krylov subspaces generated so
+        # far. Each entry is a (pivot, row) pair where pivot is the index of
+        # the first nonzero entry of row and the pivots are increasing.
+        covered = []
+
+        def reduce_covered(v):
+            # Reduce the vector v in place by the rows of covered.
+            for pivot, row in covered:
+                if v[pivot] != zero:
+                    c = v[pivot]/row[pivot]
+                    for j in range(pivot, n):
+                        rj = row[j]
+                        if rj != zero:
+                            v[j] -= c*rj
+            return v
+
+        def add_covered(v):
+            # Insert an already reduced nonzero vector into covered.
+            for pivot, vj in enumerate(v):
+                if vj != zero:
+                    break
+            else:
+                return
+            pos = len(covered)
+            while pos > 0 and covered[pos - 1][0] > pivot:
+                pos -= 1
+            covered.insert(pos, (pivot, v))
+
+        mp = [one]
+
+        for i in range(n):
+            ei = [zero]*n
+            ei[i] = one
+
+            if not any(reduce_covered(ei[:])):
+                # ei lies in the M-invariant sum of the Krylov subspaces
+                # computed so far so its minimal polynomial already divides
+                # mp and does not need to be computed.
+                continue
+
+            # Find the first linear dependence in the Krylov sequence
+            # ei, M*ei, M^2*ei, ... The chain is kept as a row echelon basis
+            # of (pivot, row, combo) triples where combo expresses the row as
+            # a linear combination of the Krylov vectors.
+            chain = []
+            v = ei
+
+            while True:
+                k = len(chain)
+                w = v[:]
+                coeffs = [zero]*k
+
+                for pivot, row, combo in chain:
+                    if w[pivot] != zero:
+                        c = w[pivot]/row[pivot]
+                        for j in range(pivot, n):
+                            rj = row[j]
+                            if rj != zero:
+                                w[j] -= c*rj
+                        for j, cj in enumerate(combo):
+                            if cj != zero:
+                                coeffs[j] += c*cj
+
+                if not any(w):
+                    # M^k*ei = sum(coeffs[j]*M^j*ei) so the minimal
+                    # polynomial of ei is x^k - sum(coeffs[j]*x^j).
+                    p = [one] + [-cj for cj in reversed(coeffs)]
+                    break
+
+                for pivot, wj in enumerate(w):
+                    if wj != zero:
+                        break
+                combo = [-cj for cj in coeffs] + [one]
+                pos = len(chain)
+                while pos > 0 and chain[pos - 1][0] > pivot:
+                    pos -= 1
+                chain.insert(pos, (pivot, w, combo))
+                v = matvec(v)
+
+            # The lcm of monic polynomials over a field is monic.
+            g = dup_gcd(mp, p, K)
+            mp = dup_mul(dup_exquo(mp, g, K), p, K)
+
+            for _, row, _ in chain:
+                add_covered(reduce_covered(row[:]))
+
+        return mp
 
     def ground_eigenvals(self):
         """

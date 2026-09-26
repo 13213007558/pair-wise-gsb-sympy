@@ -1175,6 +1175,105 @@ def test_DomainMatrix_charpoly():
     raises(DMNonSquareMatrixError, lambda: Ans.charpoly())
 
 
+def _eval_poly_DM(p, A):
+    # Evaluate the polynomial p (in dup format) at the matrix A.
+    K = A.domain
+    n = A.shape[0]
+    R = DomainMatrix({}, (n, n), K)
+    I = DomainMatrix.eye(n, K)
+    for c in p:
+        R = R*A + I*c
+    return R
+
+
+def test_DomainMatrix_minpoly():
+    A = DomainMatrix([], (0, 0), QQ)
+    p = [QQ(1)]
+    assert A.minpoly() == p
+    assert A.to_sparse().minpoly() == p
+
+    A = DM([[2]], QQ)
+    p = [QQ(1), QQ(-2)]
+    assert A.minpoly() == p
+    assert A.to_sparse().minpoly() == p
+
+    A = DM([[2, 0], [0, 2]], QQ)
+    p = [QQ(1), QQ(-2)]
+    assert A.minpoly() == p
+    assert A.to_sparse().minpoly() == p
+
+    A = DM([[0, 0], [0, 0]], QQ)
+    p = [QQ(1), QQ(0)]
+    assert A.minpoly() == p
+    assert A.to_sparse().minpoly() == p
+
+    # These matrices all have characteristic polynomial (x - 2)^3 but the
+    # minimal polynomial depends on the sizes of the Jordan blocks.
+    A = DM([[2, 0, 0], [0, 2, 0], [0, 0, 2]], QQ)
+    B = DM([[2, 1, 0], [0, 2, 0], [0, 0, 2]], QQ)
+    C = DM([[2, 1, 0], [0, 2, 1], [0, 0, 2]], QQ)
+    cp = [QQ(1), QQ(-6), QQ(12), QQ(-8)]
+    assert A.charpoly() == B.charpoly() == C.charpoly() == cp
+    pA = [QQ(1), QQ(-2)]
+    pB = [QQ(1), QQ(-4), QQ(4)]
+    pC = cp
+    assert A.minpoly() == pA
+    assert B.minpoly() == pB
+    assert C.minpoly() == pC
+    for M, pM in [(A, pA), (B, pB), (C, pC)]:
+        assert M.to_sparse().minpoly() == pM
+        assert _eval_poly_DM(pM, M).nnz() == 0
+
+    # The minimal polynomial of B is (x - 2)^2. It is not the squarefree
+    # part x - 2 of the characteristic polynomial and no monic polynomial of
+    # degree less than 2 annihilates B.
+    assert _eval_poly_DM([QQ(1), QQ(-2)], B).nnz() != 0
+    assert _eval_poly_DM([QQ(1)], B).nnz() != 0
+
+    # The Krylov relation for the first basis vector e0 is (x - 2)^2 but it
+    # does not annihilate the whole matrix. The minimal polynomial of the
+    # matrix is (x - 2)^2*(x - 3).
+    A = DM([[2, 1, 0], [0, 2, 0], [0, 0, 3]], QQ)
+    p = [QQ(1), QQ(-7), QQ(16), QQ(-12)]
+    assert A.minpoly() == p
+    assert A.to_sparse().minpoly() == p
+    assert _eval_poly_DM(p, A).nnz() == 0
+    assert _eval_poly_DM([QQ(1), QQ(-4), QQ(4)], A).nnz() != 0
+
+    # Over GF(2) the polynomial x^2 + 1 has 1 as a repeated root.
+    K = FF(2)
+    A = DM([[1, 1], [0, 1]], K)
+    p = [K(1), K(0), K(1)]
+    assert A.minpoly() == p
+    assert A.to_sparse().minpoly() == p
+    assert _eval_poly_DM(p, A).nnz() == 0
+    assert _eval_poly_DM([K(1), K(1)], A).nnz() != 0
+
+    # Over GF(3) the polynomial (x - 1)^3 equals x^3 - 1.
+    K = FF(3)
+    A = DM([[1, 1, 0], [0, 1, 1], [0, 0, 1]], K)
+    p = [K(1), K(0), K(0), K(-1)]
+    assert A.minpoly() == p
+    assert A.to_sparse().minpoly() == p
+    assert _eval_poly_DM(p, A).nnz() == 0
+
+    # A scalar matrix over a finite field.
+    K = FF(5)
+    A = DM([[2, 0], [0, 2]], K)
+    p = [K(1), K(-2)]
+    assert A.minpoly() == p
+    assert A.to_sparse().minpoly() == p
+
+    A = DomainMatrix([[QQ(1), QQ(2)]], (1, 2), QQ)
+    raises(DMNonSquareMatrixError, lambda: A.minpoly())
+
+    A = DM([[1, 2], [3, 4]], ZZ)
+    raises(DMDomainError, lambda: A.minpoly())
+
+    A = DM([[1, 2], [3, 4]], EXRAW)
+    raises(DMDomainError, lambda: A.minpoly())
+
+
 def test_DomainMatrix_charpoly_factor_list():
     A = DomainMatrix([], (0, 0), ZZ)
     assert A.charpoly_factor_list() == []

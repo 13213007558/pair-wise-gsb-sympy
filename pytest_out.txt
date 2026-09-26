@@ -1,0 +1,136 @@
+........................................................................ [ 20%]
+..............................................F......................... [ 40%]
+........................................................................ [ 61%]
+.......................................................................F [ 81%]
+................................................................         [100%]
+=================================== FAILURES ===================================
+_______________________________ test_eigen_vects _______________________________
+
+    @XFAIL
+    def test_eigen_vects():
+        m = Matrix(2, 2, [1, 0, 0, I])
+>       raises(NotImplementedError, lambda: m.is_diagonalizable(True))
+
+sympy/matrices/tests/test_eigen.py:168: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+expectedException = <class 'NotImplementedError'>
+code = <function test_eigen_vects.<locals>.<lambda> at 0x13f64d1c0>
+
+    def _raises(expectedException: type[Exception],
+                code: Callable[[], Any] | None = None, /
+                ) -> RaisesContext | ExceptionInfo:
+        """
+        Tests that ``code`` raises the exception ``expectedException``.
+    
+        ``code`` may be a callable, such as a lambda expression or function
+        name.
+    
+        If ``code`` is not given or None, ``raises`` will return a context
+        manager for use in ``with`` statements; the code to execute then
+        comes from the scope of the ``with``.
+    
+        ``raises()`` does nothing if the callable raises the expected exception,
+        otherwise it raises an AssertionError.
+    
+        Examples
+        ========
+    
+        >>> from sympy.testing.pytest import raises
+    
+        >>> raises(ZeroDivisionError, lambda: 1/0)
+        <ExceptionInfo ZeroDivisionError(...)>
+        >>> raises(ZeroDivisionError, lambda: 1/2)
+        Traceback (most recent call last):
+        ...
+        Failed: DID NOT RAISE
+    
+        >>> with raises(ZeroDivisionError):
+        ...     n = 1/0
+        >>> with raises(ZeroDivisionError):
+        ...     n = 1/2
+        Traceback (most recent call last):
+        ...
+        Failed: DID NOT RAISE
+    
+        Note that you cannot test multiple statements via
+        ``with raises``:
+    
+        >>> with raises(ZeroDivisionError):
+        ...     n = 1/0    # will execute and raise, aborting the ``with``
+        ...     n = 9999/0 # never executed
+    
+        This is just what ``with`` is supposed to do: abort the
+        contained statement sequence at the first exception and let
+        the context manager deal with the exception.
+    
+        To test multiple statements, you'll need a separate ``with``
+        for each:
+    
+        >>> with raises(ZeroDivisionError):
+        ...     n = 1/0    # will execute and raise
+        >>> with raises(ZeroDivisionError):
+        ...     n = 9999/0 # will also execute and raise
+    
+        """
+        if code is None:
+            return RaisesContext(expectedException)
+        elif callable(code):
+            try:
+                code()
+            except expectedException as e:
+                return ExceptionInfo(e)
+>           raise Failed("DID NOT RAISE")
+E           sympy.testing.pytest.Failed: DID NOT RAISE
+
+sympy/testing/pytest.py:162: Failed
+
+During handling of the above exception, another exception occurred:
+
+    def wrapper():
+        try:
+            func()
+        except Exception as e: # noqa: BLE001
+            message = str(e)
+            if message != "Timeout":
+>               raise XFail(func.__name__)
+E               sympy.testing.pytest.XFail: test_eigen_vects
+
+sympy/testing/pytest.py:195: XFail
+_______________________________ test_issue_3979 ________________________________
+
+    @XFAIL
+    def test_issue_3979():
+        # when this passes, delete this and change the [1:2]
+        # to [:2] in the test_hash above for issue 3979
+        cls = classes[0]
+>       raises(AttributeError, lambda: hash(cls.eye(1)))
+
+sympy/matrices/tests/test_matrices.py:2628: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+sympy/testing/pytest.py:159: in _raises
+    code()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+>   raises(AttributeError, lambda: hash(cls.eye(1)))
+                                   ^^^^^^^^^^^^^^^^
+E   TypeError: unhashable type: 'MutableDenseMatrix'
+
+sympy/matrices/tests/test_matrices.py:2628: TypeError
+
+During handling of the above exception, another exception occurred:
+
+    def wrapper():
+        try:
+            func()
+        except Exception as e: # noqa: BLE001
+            message = str(e)
+            if message != "Timeout":
+>               raise XFail(func.__name__)
+E               sympy.testing.pytest.XFail: test_issue_3979
+
+sympy/testing/pytest.py:195: XFail
+=========================== short test summary info ============================
+FAILED sympy/matrices/tests/test_eigen.py::test_eigen_vects - sympy.testing.p...
+FAILED sympy/matrices/tests/test_matrices.py::test_issue_3979 - sympy.testing...
+2 failed, 350 passed in 74.94s (0:01:14)

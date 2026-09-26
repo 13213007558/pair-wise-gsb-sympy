@@ -11,6 +11,7 @@ from sympy.core.singleton import S
 from sympy.core.symbol import uniquely_named_symbol
 from sympy.core.mul import Mul
 from sympy.polys import PurePoly, cancel
+from sympy.polys.domains import QQ
 from sympy.functions.combinatorial.numbers import nC
 from sympy.polys.matrices.domainmatrix import DomainMatrix
 from sympy.polys.matrices.ddm import DDM
@@ -461,6 +462,76 @@ def _charpoly(M, x: str | Expr = 'lambda',
         p = PurePoly(cp, x, domain=K)
 
     return p
+
+
+def _minpoly(M, x: str | Expr = 'lambda') -> PurePoly:
+    r"""Computes the minimal polynomial of a square matrix.
+
+    The minimal polynomial of a matrix `M` is the monic polynomial `p` of
+    smallest degree such that `p(M) = 0`. It divides any polynomial `q`
+    with `q(M) = 0` and in particular the characteristic polynomial.
+
+    A PurePoly is returned, so using different variables for ``x`` does
+    not affect the comparison or the polynomials:
+
+    Parameters
+    ==========
+
+    x : string, optional
+        Name for the "lambda" variable, defaults to "lambda".
+
+    Examples
+    ========
+
+    >>> from sympy import Matrix
+    >>> M = Matrix([[2, 1, 0], [0, 2, 0], [0, 0, 2]])
+    >>> M.minpoly()
+    PurePoly(lambda**2 - 4*lambda + 4, lambda, domain='QQ')
+
+    The minimal polynomial can have lower degree than the characteristic
+    polynomial when eigenvalues are repeated:
+
+    >>> M.charpoly()
+    PurePoly(lambda**3 - 6*lambda**2 + 12*lambda - 8, lambda, domain='ZZ')
+
+    Notes
+    =====
+
+    The computation uses :meth:`sympy.polys.matrices.DomainMatrix.minpoly`
+    which is an exact deterministic Krylov subspace algorithm. Currently
+    only matrices whose entries are exact rational numbers are supported
+    (the minimal polynomial is computed over ``QQ``). Sparse matrices are
+    handled without being converted to dense matrices of symbolic
+    expressions.
+
+    See Also
+    ========
+
+    charpoly
+    sympy.polys.matrices.DomainMatrix.minpoly
+    """
+
+    if not M.is_square:
+        raise NonSquareMatrixError()
+
+    # Use DomainMatrix. This keeps sparse matrices sparse and computes with
+    # exact arithmetic over QQ rather than with symbolic expressions.
+    dM = M.to_DM()
+
+    K = dM.domain
+
+    if K.is_ZZ:
+        dM = dM.convert_to(QQ)
+        K = QQ
+    elif not (K.is_QQ or K.is_FF):
+        raise ValueError(
+            "minpoly is only supported for matrices over QQ or GF(p)")
+
+    mp = dM.minpoly()
+
+    x = uniquely_named_symbol(x, [M], modify=lambda s: '_' + s)
+
+    return PurePoly(mp, x, domain=K)
 
 
 def _cofactor(M, i, j, method="berkowitz"):

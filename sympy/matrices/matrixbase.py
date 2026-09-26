@@ -56,7 +56,7 @@ from .determinant import (
     _find_reasonable_pivot, _find_reasonable_pivot_naive,
     _adjugate, _charpoly, _cofactor, _cofactor_matrix, _per,
     _det, _det_bareiss, _det_berkowitz, _det_bird, _det_laplace, _det_LU,
-    _minor, _minor_submatrix)
+    _minpoly, _minor, _minor_submatrix)
 
 from .reductions import _is_echelon, _echelon_form, _rank, _rref
 
@@ -3348,6 +3348,9 @@ class MatrixBase(Printable):
     def charpoly(self, x: str | Expr = 'lambda', simplify=_utilities_simplify) -> Poly:
         return _charpoly(self, x=x, simplify=simplify)
 
+    def minpoly(self, x: str | Expr = 'lambda') -> Poly:
+        return _minpoly(self, x=x)
+
     def cofactor(self, i, j, method: str="berkowitz") -> Expr:
         return _cofactor(self, i, j, method=method)
 
@@ -3376,6 +3379,7 @@ class MatrixBase(Printable):
     _eval_determinant.__doc__            = _det.__doc__
     adjugate.__doc__                     = _adjugate.__doc__
     charpoly.__doc__                     = _charpoly.__doc__
+    minpoly.__doc__                      = _minpoly.__doc__
     cofactor.__doc__                     = _cofactor.__doc__
     cofactor_matrix.__doc__              = _cofactor_matrix.__doc__
     det.__doc__                          = _det.__doc__
