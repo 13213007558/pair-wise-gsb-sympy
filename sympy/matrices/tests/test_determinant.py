@@ -6,7 +6,7 @@ from sympy.core.numbers import Rational
 from sympy.core.symbol import (Symbol, symbols)
 from sympy.functions.elementary.miscellaneous import sqrt
 from sympy.polys.polytools import Poly
-from sympy.matrices import Matrix, eye, ones
+from sympy.matrices import Matrix, SparseMatrix, eye, ones
 from sympy.abc import x, y, z
 from sympy.testing.pytest import raises
 from sympy.matrices.exceptions import NonSquareMatrixError
@@ -288,3 +288,36 @@ def test_charpoly():
 
     n = Matrix(3, 3, [x, 0, 0, a, y, 0, b, c, z])
     assert n.charpoly() == Poly(t**3 - (x+y+z)*t**2 + t*(x*y+y*z+x*z) - x*y*z, t)
+
+
+def test_minpoly():
+    m = Matrix(3, 3, [1, 2, 3, 4, 5, 6, 7, 8, 9])
+
+    assert m.minpoly() == Poly(x**3 - 15*x**2 - 18*x, x)
+    assert m.minpoly(y) == Poly(y**3 - 15*y**2 - 18*y, y)
+    assert m.minpoly() == m.minpoly(y)
+
+    # p(M) == 0 for the computed minimal polynomial
+    assert m**3 - 15*m**2 - 18*m == Matrix.zeros(3, 3)
+
+    assert eye(3).minpoly() == Poly(x - 1, x)
+    assert Matrix([]).minpoly() == Poly(1, x)
+    assert Matrix([[5]]).minpoly() == Poly(x - 5, x)
+    assert Matrix.zeros(4, 4).minpoly() == Poly(x, x)
+
+    raises(NonSquareMatrixError, lambda: Matrix([[1], [2]]).minpoly())
+
+    # Same characteristic polynomial but different Jordan block sizes give
+    # different minimal polynomials.
+    j2j2 = Matrix([[0, 1, 0, 0], [0, 0, 0, 0], [0, 0, 0, 1], [0, 0, 0, 0]])
+    j3j1 = Matrix([[0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 0], [0, 0, 0, 0]])
+    j4 = Matrix([[0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1], [0, 0, 0, 0]])
+    assert j2j2.charpoly() == j3j1.charpoly() == j4.charpoly() == Poly(x**4, x)
+    assert j2j2.minpoly() == Poly(x**2, x)
+    assert j3j1.minpoly() == Poly(x**3, x)
+    assert j4.minpoly() == Poly(x**4, x)
+
+    # A sparse matrix keeps its sparse internal representation.
+    s = SparseMatrix([[0, 1, 0], [0, 0, 1], [0, 0, 0]])
+    assert s.minpoly() == Poly(x**3, x)
+    assert s.to_DM().rep.fmt == 'sparse'

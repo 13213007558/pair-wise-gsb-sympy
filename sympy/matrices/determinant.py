@@ -463,6 +463,67 @@ def _charpoly(M, x: str | Expr = 'lambda',
     return p
 
 
+def _minpoly(M, x: str | Expr = 'lambda') -> PurePoly:
+    """Computes the minimal polynomial of a matrix.
+
+    The minimal polynomial is the monic polynomial `p` of smallest degree
+    over the ground domain such that `p(M) = 0`. It divides the
+    characteristic polynomial but can have lower degree when the matrix has
+    repeated Jordan blocks.
+
+    A PurePoly is returned, so using different variables for `x` does
+    not affect the comparison or the polynomials:
+
+    Parameters
+    ==========
+
+    x : string, optional
+        Name for the "lambda" variable, defaults to "lambda".
+
+    Examples
+    ========
+
+    >>> from sympy import Matrix
+    >>> from sympy.abc import x, y
+    >>> M = Matrix([[0, 1, 0], [0, 0, 0], [0, 0, 0]])
+    >>> M.charpoly().as_expr()
+    lambda**3
+    >>> M.minpoly()
+    PurePoly(lambda**2, lambda, domain='ZZ')
+    >>> M.minpoly(x) == M.minpoly(y)
+    True
+
+    Notes
+    =====
+
+    The computation uses :meth:`sympy.polys.matrices.DomainMatrix.minpoly`
+    which is exact and deterministic and currently supports matrices over
+    the rationals and finite prime fields `GF(p)`. A matrix with integer
+    entries is handled by computing over `QQ` and converting the result
+    back to `ZZ`. A sparse matrix keeps its sparse internal representation
+    rather than being converted to a dense matrix of symbolic expressions.
+
+    See Also
+    ========
+
+    charpoly
+    """
+
+    if not M.is_square:
+        raise NonSquareMatrixError()
+
+    # Use DomainMatrix so that a sparse matrix keeps its sparse
+    # representation rather than being converted to a dense matrix of
+    # symbolic expressions.
+    dM = M.to_DM()
+
+    mp = dM.minpoly()
+
+    x = uniquely_named_symbol(x, [M], modify=lambda s: '_' + s)
+
+    return PurePoly(mp, x, domain=dM.domain)
+
+
 def _cofactor(M, i, j, method="berkowitz"):
     """Calculate the cofactor of an element.
 

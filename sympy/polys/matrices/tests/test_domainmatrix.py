@@ -1196,6 +1196,116 @@ def test_DomainMatrix_charpoly_factor_list():
     ]
 
 
+def _minpoly_eval(A, p):
+    # Evaluate p(A) for a coefficient list p in dup format.
+    K = A.domain
+    n = A.shape[0]
+    Asp = A.to_sparse()
+    acc = DomainMatrix.zeros((n, n), K)
+    eye = DomainMatrix.eye((n, n), K).to_sparse()
+    for c in p:
+        acc = Asp.matmul(acc) + eye.scalarmul(c)
+    return acc
+
+
+def test_DomainMatrix_minpoly():
+    # empty matrix
+    A = DomainMatrix([], (0, 0), ZZ)
+    assert A.minpoly() == [ZZ(1)]
+    assert A.to_sparse().minpoly() == [ZZ(1)]
+
+    # scalar matrices
+    A = DM([[3]], ZZ)
+    assert A.minpoly() == [ZZ(1), ZZ(-3)]
+    A = DM([[2, 0], [0, 2]], QQ)
+    assert A.minpoly() == [QQ(1), QQ(-2)]
+    assert A.to_sparse().minpoly() == [QQ(1), QQ(-2)]
+
+    # zero matrix
+    A = DomainMatrix.zeros((3, 3), QQ)
+    assert A.minpoly() == [QQ(1), QQ(0)]
+
+    # over ZZ the result is computed over QQ and converted back
+    A = DM([[1, 2], [3, 4]], ZZ)
+    assert A.minpoly() == [ZZ(1), ZZ(-5), ZZ(-2)]
+    assert A.to_sparse().minpoly() == [ZZ(1), ZZ(-5), ZZ(-2)]
+
+    # non-square matrix
+    A = DM([[1, 2, 3], [4, 5, 6]], QQ)
+    raises(DMNonSquareMatrixError, lambda: A.minpoly())
+
+    # unsupported domains
+    A = DM([[EXRAW(1)]], EXRAW)
+    raises(DMDomainError, lambda: A.minpoly())
+    A = DM([[QQ_I(1)]], QQ_I)
+    raises(DMDomainError, lambda: A.minpoly())
+
+    # Matrices with the same characteristic polynomial but different Jordan
+    # block sizes have different minimal polynomials.
+    A2 = DM([[0, 1, 0, 0], [0, 0, 0, 0], [0, 0, 0, 1], [0, 0, 0, 0]], QQ)
+    A3 = DM([[0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 0], [0, 0, 0, 0]], QQ)
+    A4 = DM([[0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1], [0, 0, 0, 0]], QQ)
+    cp = [QQ(1), QQ(0), QQ(0), QQ(0), QQ(0)]
+    assert A2.charpoly() == A3.charpoly() == A4.charpoly() == cp
+    assert A2.minpoly() == [QQ(1), QQ(0), QQ(0)]
+    assert A3.minpoly() == [QQ(1), QQ(0), QQ(0), QQ(0)]
+    assert A4.minpoly() == [QQ(1), QQ(0), QQ(0), QQ(0), QQ(0)]
+
+    # The degrees are minimal because A2**2 = 0 but A2 != 0 etc.
+    assert A2.nnz() != 0 and A2.pow(2).nnz() == 0
+    assert A3.pow(2).nnz() != 0 and A3.pow(3).nnz() == 0
+    assert A4.pow(3).nnz() != 0 and A4.pow(4).nnz() == 0
+
+    # The Krylov relation of a single vector does not determine the minimal
+    # polynomial of the whole matrix: here e_1 has relation x but the
+    # minimal polynomial is x^2.
+    A = DM([[0, 0, 0], [0, 0, 1], [0, 0, 0]], QQ)
+    assert A.minpoly() == [QQ(1), QQ(0), QQ(0)]
+
+    # Many repeated Jordan blocks: the minimal polynomial is x^2, not the
+    # characteristic polynomial x^8. Also checks the sparse representation.
+    A = DM([[0, 1, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 1, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 1, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 1],
+            [0, 0, 0, 0, 0, 0, 0, 0]], QQ)
+    assert A.charpoly() == [QQ(1)] + [QQ(0)]*8
+    assert A.minpoly() == [QQ(1), QQ(0), QQ(0)]
+    assert A.to_sparse().minpoly() == [QQ(1), QQ(0), QQ(0)]
+    assert _minpoly_eval(A, A.minpoly()).nnz() == 0
+
+    # Over GF(2) the characteristic polynomial x^2 has squarefree part x
+    # but the minimal polynomial of a Jordan block is x^2.
+    K = FF(2)
+    A = DM([[0, 1], [0, 0]], K)
+    assert A.minpoly() == [K(1), K(0), K(0)]
+
+    # Repeated roots over a finite field: diag(J2(1), J2(1)) over GF(5) has
+    # characteristic polynomial (x - 1)^4 but minimal polynomial (x - 1)^2.
+    K = FF(5)
+    A = DM([[1, 1, 0, 0], [0, 1, 0, 0], [0, 0, 1, 1], [0, 0, 0, 1]], K)
+    assert A.charpoly() == [K(1), K(-4), K(6), K(-4), K(1)]
+    assert A.minpoly() == [K(1), K(-2), K(1)]
+    assert A.to_sparse().minpoly() == [K(1), K(-2), K(1)]
+    assert _minpoly_eval(A, A.minpoly()).nnz() == 0
+
+    # A matrix whose minimal polynomial has a repeated irreducible factor
+    # and a distinct factor over GF(3): (x^2 + 1)^2 * (x - 1). The first
+    # 4x4 block is [[C, I], [0, C]] for the companion matrix C of x^2 + 1.
+    K = FF(3)
+    A = DM([[0, 2, 1, 0, 0],
+            [1, 0, 0, 1, 0],
+            [0, 0, 0, 2, 0],
+            [0, 0, 1, 0, 0],
+            [0, 0, 0, 0, 1]], K)
+    assert A.minpoly() == [K(1), K(-1), K(-1), K(1), K(1), K(-1)]
+    assert A.to_sparse().minpoly() == [K(1), K(-1), K(-1), K(1), K(1), K(-1)]
+    assert _minpoly_eval(A, A.minpoly()).nnz() == 0
+
+
 def test_DomainMatrix_ground_eigenvals():
     A = DomainMatrix([], (0, 0), ZZ)
     assert A.ground_eigenvals() == {}

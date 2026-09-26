@@ -44,9 +44,11 @@ from sympy.polys.densetools import (
     dup_mul_ground,
     dup_content,
     dup_clear_denoms,
+    dup_monic,
     dup_primitive,
     dup_transform,
 )
+from sympy.polys.euclidtools import dup_lcm
 from sympy.polys.factortools import dup_factor_list
 from sympy.polys.polyutils import _sort_factors
 
@@ -3769,6 +3771,159 @@ class DomainMatrix:
         sympy.polys.matrices.sdm.sdm_berk
         """
         return self.rep.charpoly()
+
+    def minpoly(self):
+        r"""
+        Minimal polynomial of a square matrix over a field.
+
+        Computes the minimal polynomial of the matrix: the unique monic
+        polynomial `p` of smallest degree over the ground domain such that
+        `p(M) = 0`. The minimal polynomial divides the characteristic
+        polynomial but can have lower degree when the matrix has repeated
+        Jordan blocks.
+
+        Currently the supported ground domains are the rationals
+        :ref:`QQ` and finite prime fields `GF(p)`. If the domain is not a
+        field but has an associated fraction field (e.g. :ref:`ZZ`) then
+        the computation is performed over the fraction field and the result
+        is converted back to the original domain (the minimal polynomial of
+        an integral matrix is monic and divides the characteristic
+        polynomial so its coefficients are always in the original domain).
+
+        Returns
+        =======
+
+        list: list of DomainElement
+            coefficients of the minimal polynomial
+
+        Examples
+        ========
+
+        >>> from sympy import ZZ, FF
+        >>> from sympy.polys.matrices import DM
+
+        A matrix whose minimal polynomial has lower degree than its
+        characteristic polynomial:
+
+        >>> M = DM([[0, 1, 0],
+        ...         [0, 0, 0],
+        ...         [0, 0, 0]], ZZ)
+        >>> M.charpoly()
+        [1, 0, 0, 0]
+        >>> M.minpoly()
+        [1, 0, 0]
+
+        The result is a monic polynomial over the ground domain of the
+        matrix. Here the minimal polynomial is `x^2 - 2x + 1 = (x - 1)^2`
+        over `GF(5)`:
+
+        >>> K = FF(5)
+        >>> M = DM([[1, 1], [0, 1]], K)
+        >>> [K.to_sympy(c) for c in M.minpoly()]
+        [1, -2, 1]
+
+        Notes
+        =====
+
+        The algorithm is deterministic and exact. For each standard basis
+        vector `e_i` the Krylov sequence `e_i, M e_i, M^2 e_i, ...` is
+        computed and its first linear dependence gives the minimal
+        polynomial of `e_i` (found by row reducing the Krylov matrix). The
+        minimal polynomial of `M` is the least common multiple of the
+        minimal polynomials of the `e_i` because `p(M) = 0` if and only
+        if `p(M) e_i = 0` for every `i`. Vectors that are already
+        annihilated by the accumulated polynomial are skipped which makes
+        the algorithm fast for matrices with many repeated Jordan blocks.
+
+        The matrix is kept in the sparse (SDM) representation for the
+        Krylov matrix-vector products so sparse matrices are not converted
+        to a dense representation.
+
+        See Also
+        ========
+
+        charpoly
+        charpoly_factor_list
+        """
+        M = self
+        K = M.domain
+
+        if not M.is_square:
+            raise DMNonSquareMatrixError("minpoly requires a square matrix")
+
+        convert_back = False
+        if not K.is_Field:
+            if K.has_assoc_Field:
+                M = M.to_field()
+                K = M.domain
+                convert_back = True
+            else:
+                raise DMNotAField("minpoly requires a field")
+
+        if not (K.is_QQ or K.is_FiniteField):
+            raise DMDomainError("minpoly is not supported over domain %s" % K)
+
+        n = M.shape[0]
+
+        if n == 0:
+            return [K.one]
+
+        # Use the sparse representation for the Krylov matrix-vector
+        # products so that a sparse matrix is never densified.
+        Ms = M.to_sparse()
+        from_rep = M.from_rep
+
+        # Accumulate the lcm of the minimal polynomials of the standard
+        # basis vectors. The minimal polynomial of M is the lcm of the
+        # minimal polynomials of the e_i because p(M) = 0 if and only if
+        # p(M) e_i = 0 for all i.
+        mp = [K.one]
+        deg_mp = 0
+
+        for i in range(n):
+            if deg_mp == n:
+                # Cayley-Hamilton: the minimal polynomial has degree at
+                # most n so mp must be the characteristic polynomial.
+                break
+
+            e = from_rep(SDM.new({i: {0: K.one}}, (n, 1), K))
+
+            # Krylov vectors vs[k] = M^k e up to the degree of mp.
+            vs = [e]
+            for _ in range(deg_mp):
+                vs.append(Ms.matmul(vs[-1]))
+
+            if deg_mp > 0:
+                # If mp already annihilates e then the minimal polynomial
+                # of e divides mp and the lcm is unchanged. This is the
+                # common case when the matrix has many repeated Jordan
+                # blocks.
+                pe = vs[0].scalarmul(mp[deg_mp])
+                for k in range(1, deg_mp + 1):
+                    pe = pe + vs[k].scalarmul(mp[deg_mp - k])
+                if pe.nnz() == 0:
+                    continue
+
+            # Extend the Krylov sequence. The first linearly dependent
+            # vector gives the minimal polynomial of e.
+            for _ in range(deg_mp, n):
+                vs.append(Ms.matmul(vs[-1]))
+
+            krylov = vs[0].hstack(*vs[1:])
+            R, pivots = krylov.rref()
+
+            # The first non-pivot column j is a linear combination of the
+            # pivot columns 0..j-1: M^j e = sum_k R[k, j] M^k e.
+            j = next(c for c in range(n + 1) if c not in pivots)
+            rel = [K.one] + [-R[k, j].element for k in range(j - 1, -1, -1)]
+
+            mp = dup_monic(dup_lcm(mp, rel, K), K)
+            deg_mp = len(mp) - 1
+
+        if convert_back:
+            mp = dup_convert(mp, K, self.domain)
+
+        return mp
 
     def ground_eigenvals(self):
         """
