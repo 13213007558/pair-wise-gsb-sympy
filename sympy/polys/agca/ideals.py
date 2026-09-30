@@ -1,8 +1,14 @@
 """Computations with ideals of polynomial rings."""
 from __future__ import annotations
 
+from collections import namedtuple
+
 from sympy.polys.polyerrors import CoercionFailed
 from sympy.polys.polyutils import IntegerPowerable
+
+
+SaturationResult = namedtuple('SaturationResult', [
+    'ideal', 'exponent', 'relations', 'complete'])
 
 
 class Ideal(IntegerPowerable):
@@ -194,8 +200,8 @@ class Ideal(IntegerPowerable):
         That is, if ``self`` is the ideal `I`, compute the set
         `I : J^\infty = \{x \in R | xJ^n \subset I \text{ for some } n\}`.
         """
+        self._check_ideal(J)
         raise NotImplementedError
-        # Note this can be implemented using repeated quotient
 
     def union(self, J):
         """
@@ -394,3 +400,112 @@ class ModuleImplementedIdeal(Ideal):
 
     def reduce_element(self, x, **options):
         return self._module.reduce_element([x], **options)[0]
+
+    def saturate(self, J, exponent=False, relations=False,
+                 max_iterations=None, incomplete=False):
+        r"""
+        Compute the saturation of this ideal by ``J``.
+
+        The default return value is the ideal
+        `I : J^\infty = \\{x \\mid xJ^n \\subseteq I\\}`.
+
+        Pass ``exponent=True`` to also return an integer ``n`` such that the
+        saturation is `I : J^n`. Pass ``relations=True`` to also return
+        membership relations for the generators of the result. Each relation
+        pairs a generator of `J^n` with coefficients expressing the product in
+        terms of the generators of this ideal. If either is requested, or if
+        an incomplete result is allowed, a :class:`SaturationResult` is
+        returned.
+
+        Pass ``max_iterations`` to bound the number of ideal quotients. If the
+        ascending chain has not stabilized in that many steps and
+        ``incomplete=True``, the returned result has ``complete=False``;
+        its exponent and relations are then ``None``. Otherwise
+        ``NotImplementedError`` is raised.
+
+        Examples
+        ========
+
+        >>> from sympy import QQ
+        >>> from sympy.abc import x, y, z
+        >>> R = QQ.old_poly_ring(x, y, z)
+        >>> I = R.ideal(x*y, x*z)
+        >>> J = R.ideal(y, z)
+        >>> I.saturate(J)
+        <-x>
+        >>> result = I.saturate(J, exponent=True, relations=True)
+        >>> result.exponent
+        1
+        >>> len(result.relations[0])
+        2
+        """
+        self._check_ideal(J)
+        if max_iterations is not None:
+            if (not isinstance(max_iterations, int)
+                    or isinstance(max_iterations, bool)):
+                raise TypeError(
+                    'max_iterations must be a non-negative integer')
+            if max_iterations < 0:
+                raise ValueError(
+                    'max_iterations must be a non-negative integer')
+
+        ring = self.ring
+        whole_ring = ring.ideal(1)
+
+        if self.is_whole_ring():
+            saturated = whole_ring
+            n = 0
+            complete = True
+        else:
+            current = self
+            saturated = None
+            n = 0
+            complete = False
+            while max_iterations is None or n < max_iterations:
+                n += 1
+                next_ideal = current.quotient(J)
+                if next_ideal == current:
+                    saturated = next_ideal
+                    n -= 1
+                    complete = True
+                    break
+                if next_ideal.is_whole_ring():
+                    saturated = whole_ring
+                    complete = True
+                    break
+                current = next_ideal
+
+            if not complete:
+                if max_iterations is None:
+                    raise RuntimeError('ideal saturation chain did not stabilize')
+                if not incomplete:
+                    raise NotImplementedError(
+                        'ideal saturation chain did not stabilize within '
+                        '%d iterations' % max_iterations)
+                saturated = current
+                n = max_iterations
+
+        if not complete:
+            return SaturationResult(saturated, None, None, False)
+
+        if not (exponent or relations or incomplete):
+            return saturated
+
+        membership_relations = None
+        if relations and complete:
+            ideal_generators = tuple(self.gens)
+            saturation_generators = tuple(saturated.gens)
+            power_generators = tuple((J**n).gens)
+            membership_relations = tuple(
+                tuple(
+                    (q,
+                     [ring.zero]*len(ideal_generators) if g*q == ring.zero
+                     else self.in_terms_of_generators(g*q))
+                    for q in power_generators)
+                for g in saturation_generators)
+
+        return SaturationResult(
+            saturated,
+            n if exponent else None,
+            membership_relations,
+            complete if incomplete else True)
