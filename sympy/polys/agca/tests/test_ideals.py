@@ -131,6 +131,103 @@ def test_quotient():
     assert R.ideal(x, y).quotient(R.ideal(y**2, z)) == R.ideal(x, y)
 
 
+def _saturation_by_elimination(Igens, Jgens, gens):
+    # Compute I : J**oo independently of Ideal.saturate, using the
+    # Rabinowitsch trick: I : J**oo is the intersection over the
+    # generators g of J of (I, 1 - t*g) intersected with QQ[gens].
+    from sympy import Dummy, groebner
+    t = Dummy('t')
+    R = QQ.old_poly_ring(*gens)
+    sat = R.ideal(1)
+    for g in Jgens:
+        G = groebner(list(Igens) + [1 - t*g], t, *gens, domain=QQ)
+        sat = sat.intersect(R.ideal(*[e for e in G.exprs if not e.has(t)]))
+    return sat
+
+
+def test_saturate():
+    R = QQ.old_poly_ring(x, y)
+
+    I = R.ideal(x*y)
+    assert I.saturate(R.ideal(x)) == R.ideal(y)
+    assert I.saturate(R.ideal(x), exponent=True) == (R.ideal(y), 1)
+
+    # Saturating by each generator of J separately and combining the
+    # results does not give the saturation by J.
+    assert I.saturate(R.ideal(x)).union(I.saturate(R.ideal(y))) == R.ideal(x, y)
+    assert I.saturate(R.ideal(x, y)) == I
+    assert I.saturate(R.ideal(x, y), exponent=True) == (I, 0)
+
+    assert R.ideal(x**2, y**2).saturate(R.ideal(x, y), exponent=True) == (
+        R.ideal(1), 3)
+
+    # zero and unit ideals
+    assert R.ideal().saturate(R.ideal(x), exponent=True) == (R.ideal(), 0)
+    assert R.ideal(x).saturate(R.ideal(), exponent=True) == (R.ideal(1), 1)
+    assert R.ideal(x).saturate(R.ideal(1), exponent=True) == (R.ideal(x), 0)
+    assert R.ideal(1).saturate(R.ideal(x), exponent=True) == (R.ideal(1), 0)
+
+    # the same ideals written with different generators
+    assert R.ideal(x*y, x**2).saturate(R.ideal(x)) == \
+        R.ideal(x*y + x**2, x**2).saturate(R.ideal(x, x**2))
+
+    # ideals of different rings are rejected
+    raises(ValueError, lambda: I.saturate(QQ.old_poly_ring(y).ideal(y)))
+    raises(ValueError, lambda: I.saturate(x))
+
+    # computation budget: report incomplete if the quotient sequence
+    # has not stabilized
+    J = R.ideal(x, y)
+    raises(RuntimeError, lambda: R.ideal(x**2, y**2).saturate(J, max_iterations=2))
+    assert R.ideal(x**2, y**2).saturate(J, max_iterations=3).is_whole_ring()
+
+
+def test_saturate_against_elimination():
+    R = QQ.old_poly_ring(x, y)
+    for Igens, Jgens in [
+            ([x*y], [x]),
+            ([x*y], [x, y]),
+            ([x**2, x*y], [x]),
+            ([x**2, y**2], [x, y]),
+            ([x**2*y, x*y**2], [x + y]),
+            ([], [x]),
+            ([1], [x, y]),
+            ([x], [1])]:
+        I = R.ideal(*Igens)
+        assert I.saturate(R.ideal(*Jgens)) == \
+            _saturation_by_elimination(Igens, Jgens, (x, y))
+
+
+def test_saturate_coefficients():
+    R = QQ.old_poly_ring(x, y)
+
+    def check(Igens, Jgens):
+        I = R.ideal(*Igens)
+        J = R.ideal(*Jgens)
+        sat, n, evidence = I.saturate(J, exponent=True, coefficients=True)
+        Igens_ring = list(I.gens)
+        Jn_gens = list((J**n).gens)
+        sat_gens = list(sat.gens)
+        assert len(evidence) == len(sat_gens)
+        for h, rels in zip(sat_gens, evidence):
+            assert len(rels) == len(Jn_gens)
+            for (p, c), q in zip(rels, Jn_gens):
+                assert p == q
+                assert len(c) == len(Igens_ring)
+                assert h*p == sum(ci*gi for ci, gi in zip(c, Igens_ring))
+        return sat, n
+
+    assert check([x*y, x**2], [x]) == (R.ideal(1), 2)
+    assert check([x*y], [x, y]) == (R.ideal(x*y), 0)
+    assert check([x**2, y**2], [x, y])[0].is_whole_ring()
+    assert check([x], []) == (R.ideal(1), 1)
+
+    # coefficients alone also returns a tuple
+    sat, evidence = R.ideal(x*y).saturate(R.ideal(x), coefficients=True)
+    assert sat == R.ideal(y)
+    assert len(evidence) == len(list(sat.gens))
+
+
 def test_reduction():
     from sympy.polys.distributedmodules import sdm_nf_buchberger_reduced
     R = QQ.old_poly_ring(x, y)

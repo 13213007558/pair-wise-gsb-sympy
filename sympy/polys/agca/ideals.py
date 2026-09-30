@@ -25,6 +25,7 @@ class Ideal(IntegerPowerable):
     - _contains_elem
     - _contains_ideal
     - _quotient
+    - _saturate
     - _intersect
     - _union
     - _product
@@ -50,6 +51,10 @@ class Ideal(IntegerPowerable):
 
     def _quotient(self, J):
         """Implementation of ideal quotient."""
+        raise NotImplementedError
+
+    def _saturate(self, J, **opts):
+        """Implementation of ideal saturation."""
         raise NotImplementedError
 
     def _intersect(self, J):
@@ -187,15 +192,47 @@ class Ideal(IntegerPowerable):
         self._check_ideal(J)
         return self._intersect(J)
 
-    def saturate(self, J):
+    def saturate(self, J, **opts):
         r"""
         Compute the ideal saturation of ``self`` by ``J``.
 
         That is, if ``self`` is the ideal `I`, compute the set
         `I : J^\infty = \{x \in R | xJ^n \subset I \text{ for some } n\}`.
+
+        The saturation is computed as the stable value of the ascending
+        chain of quotients `I : J^n`, `n = 0, 1, ...`.
+
+        Examples
+        ========
+
+        >>> from sympy.abc import x, y
+        >>> from sympy import QQ
+        >>> R = QQ.old_poly_ring(x, y)
+        >>> R.ideal(x*y).saturate(R.ideal(x))
+        <y>
+
+        The following options are supported:
+
+        - ``exponent=True``: also return the saturation exponent, the
+          smallest non-negative integer `n` with
+          `I : J^n = I : J^\infty`.
+        - ``coefficients=True``: also return membership evidence for the
+          result. This is a list with one entry per generator `h` of the
+          saturation; each entry is a list of pairs `(p, c)`, where `p`
+          is a generator of `J^n` (with `n` the saturation exponent) and
+          `c` is a list of coefficients expressing `h p` in terms of the
+          generators of ``self``. Replaying these polynomial identities
+          verifies that `h J^n` is contained in ``self``.
+        - ``max_iterations=k``: allow at most `k` quotient computations.
+          If the quotient sequence has not stabilized after `k` steps, a
+          ``RuntimeError`` is raised, since the saturation could not be
+          determined completely.
+
+        >>> R.ideal(x*y).saturate(R.ideal(x), exponent=True)
+        (<y>, 1)
         """
-        raise NotImplementedError
-        # Note this can be implemented using repeated quotient
+        self._check_ideal(J)
+        return self._saturate(J, **opts)
 
     def union(self, J):
         """
@@ -310,6 +347,35 @@ class ModuleImplementedIdeal(Ideal):
         if not isinstance(J, ModuleImplementedIdeal):
             raise NotImplementedError
         return self._module.module_quotient(J._module, **opts)
+
+    def _saturate(self, J, exponent=False, coefficients=False,
+                  max_iterations=None):
+        if not isinstance(J, ModuleImplementedIdeal):
+            raise NotImplementedError
+        sat = self
+        n = 0
+        while not sat.is_whole_ring():
+            if max_iterations is not None and n >= max_iterations:
+                raise RuntimeError(
+                    'saturation did not stabilize after %s quotient '
+                    'iterations' % max_iterations)
+            nxt = sat._quotient(J)
+            if nxt == sat:
+                break
+            sat = nxt
+            n += 1
+        result = [sat]
+        if exponent:
+            result.append(n)
+        if coefficients:
+            evidence = []
+            for h in sat.gens:
+                evidence.append([(p, self.in_terms_of_generators(h*p))
+                                 for p in (J**n).gens])
+            result.append(evidence)
+        if len(result) == 1:
+            return sat
+        return tuple(result)
 
     def _union(self, J):
         if not isinstance(J, ModuleImplementedIdeal):
