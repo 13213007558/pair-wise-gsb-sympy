@@ -21,3 +21,12 @@ This section lists the classes implemented by the Algebras module.
 
 .. autoclass:: Quaternion
    :members:
+
+Baker-Campbell-Hausdorff Expansion
+----------------------------------
+
+.. module:: sympy.algebras.bch
+
+.. autofunction:: bch_expansion
+
+.. autofunction:: hall_basis
