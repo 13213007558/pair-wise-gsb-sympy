@@ -6,6 +6,8 @@ Lie Algebra
 
 .. automodule:: sympy.liealgebras
 
+.. autofunction:: sympy.liealgebras.baker_campbell_hausdorff
+
 .. autoclass:: sympy.liealgebras.root_system.RootSystem
    :members:
 
